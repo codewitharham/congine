@@ -1,0 +1,6 @@
+httpx>=0.28.1
+jsonpatch>=1.33
+jsonschema>=4.26.0
+pydantic>=2.13.4
+pytest>=9.0.3
+ruff>=0.15.15

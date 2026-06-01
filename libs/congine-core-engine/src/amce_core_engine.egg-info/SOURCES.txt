@@ -1,0 +1,6 @@
+pyproject.toml
+src/amce_core_engine.egg-info/PKG-INFO
+src/amce_core_engine.egg-info/SOURCES.txt
+src/amce_core_engine.egg-info/dependency_links.txt
+src/amce_core_engine.egg-info/requires.txt
+src/amce_core_engine.egg-info/top_level.txt
