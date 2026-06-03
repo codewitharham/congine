@@ -7,8 +7,8 @@ supported; the wrapper returns ``{"output": ..., "validation_result": ...}``.
 
 from __future__ import annotations
 
-import asyncio
 import functools
+import inspect
 from typing import Callable, Optional
 
 from congine_core.adapters.dependency_injection import ServiceContainer
@@ -63,7 +63,7 @@ def congine_guard(
             )
             return {"output": output, "validation_result": validation_result}
 
-        if asyncio.iscoroutinefunction(fn):
+        if inspect.iscoroutinefunction(fn):
             return async_wrapper
         return sync_wrapper
 

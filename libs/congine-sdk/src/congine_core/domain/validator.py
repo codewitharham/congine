@@ -35,6 +35,22 @@ _JSON_TYPE_MAP: Dict[str, Tuple[type, ...]] = {
 }
 
 
+def _path_present(payload: dict, dotted_field: str) -> bool:
+    """Return ``True`` if *dotted_field* resolves to a present key in *payload*.
+
+    Supports dot-notation traversal (``"a.b.c"``): each segment must exist and
+    every intermediate segment must itself be a mapping. A missing leaf, or a
+    non-dict encountered mid-path, means the field is absent. A key whose value
+    is ``None`` still counts as *present* (nullability is NULL_GUARD's concern).
+    """
+    node: Any = payload
+    for segment in dotted_field.split("."):
+        if not isinstance(node, dict) or segment not in node:
+            return False
+        node = node[segment]
+    return True
+
+
 def _type_matches(value: Any, json_type: str) -> bool:
     """Return ``True`` if *value* satisfies JSON-schema *json_type*."""
     expected = _JSON_TYPE_MAP.get(json_type)
@@ -59,10 +75,14 @@ class RuleEngine:
 
     @staticmethod
     def FIELD_PRESENCE(payload: dict, required_fields: List[str]) -> List[BreachDetail]:
-        """Rule 1: every required field must be present in *payload*."""
+        """Rule 1: every required field must be present in *payload*.
+
+        Field names may use dot-notation (``"a.b.c"``) to require nested keys;
+        a missing leaf — or a non-dict intermediate — is a breach.
+        """
         breaches: List[BreachDetail] = []
         for field_name in required_fields:
-            if field_name not in payload:
+            if not _path_present(payload, field_name):
                 breaches.append(
                     BreachDetail(
                         rule="FIELD_PRESENCE",
@@ -192,7 +212,9 @@ class RuleEngine:
             pattern = spec.get("pattern") if isinstance(spec, dict) else spec
             if not pattern:
                 continue
-            if re.search(pattern, value) is None:
+            # Anchored full-string match: the entire value must satisfy the
+            # pattern (re.fullmatch), not merely contain a match.
+            if re.fullmatch(pattern, value) is None:
                 breaches.append(
                     BreachDetail(
                         rule="REGEX_PATTERN",

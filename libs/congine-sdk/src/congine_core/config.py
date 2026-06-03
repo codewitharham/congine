@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+from congine_core.exceptions import CongineConfigurationError
+
 
 class Region(str, Enum):
     """Deployment region for the Congine control plane.
@@ -36,9 +38,14 @@ class FailMode(str, Enum):
     SILENT = "silent"  # Ignore failures
 
 
-@dataclass
+@dataclass(frozen=True)
 class CongineConfig:
     """Congine SDK configuration.
+
+    The dataclass is ``frozen=True``: once assembled at bootstrap the instance
+    is immutable and threaded read-only through every layer. Any attempt to
+    mutate a field after construction raises
+    :class:`dataclasses.FrozenInstanceError`.
 
     Attributes
     ----------
@@ -86,18 +93,56 @@ class CongineConfig:
         CongineConfig
             A configuration instance populated from the environment, falling
             back to sensible defaults where variables are unset.
+
+        Raises
+        ------
+        CongineConfigurationError
+            If an environment value cannot be parsed into its target type
+            (e.g. an unknown region/fail-mode, or a non-integer numeric).
         """
+        try:
+            region = Region(os.getenv("CONGINE_REGION", "us"))
+        except ValueError as exc:
+            raise CongineConfigurationError(
+                f"Invalid CONGINE_REGION: {os.getenv('CONGINE_REGION')!r}"
+            ) from exc
+        try:
+            fail_mode = FailMode(os.getenv("CONGINE_FAIL_MODE", "degrade"))
+        except ValueError as exc:
+            raise CongineConfigurationError(
+                f"Invalid CONGINE_FAIL_MODE: {os.getenv('CONGINE_FAIL_MODE')!r}"
+            ) from exc
+
         return cls(
             base_url=os.getenv("CONGINE_BASE_URL", "http://localhost:8080"),
             api_key=os.getenv("CONGINE_API_KEY"),
             project_id=os.getenv("CONGINE_PROJECT_ID"),
             tenant_id=os.getenv("CONGINE_TENANT_ID"),
-            region=Region(os.getenv("CONGINE_REGION", "us")),
-            validation_timeout_ms=int(os.getenv("CONGINE_TIMEOUT_MS", "15")),
-            fail_mode=FailMode(os.getenv("CONGINE_FAIL_MODE", "degrade")),
-            cache_capacity=int(os.getenv("CONGINE_CACHE_CAPACITY", "500")),
-            cache_ttl_seconds=int(os.getenv("CONGINE_CACHE_TTL", "300")),
+            region=region,
+            validation_timeout_ms=cls._env_int("CONGINE_TIMEOUT_MS", 15),
+            fail_mode=fail_mode,
+            cache_capacity=cls._env_int("CONGINE_CACHE_CAPACITY", 500),
+            cache_ttl_seconds=cls._env_int("CONGINE_CACHE_TTL", 300),
         )
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        """Parse integer environment variable *name*, defaulting if unset.
+
+        Raises
+        ------
+        CongineConfigurationError
+            If the variable is set but not a valid integer.
+        """
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise CongineConfigurationError(
+                f"Invalid integer for {name}: {raw!r}"
+            ) from exc
 
 
 __all__ = ["Region", "FailMode", "CongineConfig"]

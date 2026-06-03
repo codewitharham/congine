@@ -11,8 +11,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from congine_core.config import FailMode
 from congine_core.domain.models import TelemetryEvent, ValidationResult
 from congine_core.domain.validator import IValidator
+from congine_core.exceptions import (
+    CongineContractNotFoundError,
+    CongineValidationError,
+)
 from congine_core.repositories.event_bus import IEventBus
 from congine_core.repositories.logger import ILogger
 from congine_core.repositories.schema_storage import ISchemaStorage
@@ -32,6 +37,7 @@ class ValidateContractUseCase:
         logger: ILogger,
         timer: "ValidationTimer",
         timeout_ms: int = 15,
+        fail_mode: FailMode = FailMode.DEGRADE,
     ) -> None:
         """Constructor injection of all collaborators.
 
@@ -42,6 +48,10 @@ class ValidateContractUseCase:
             logger: Structured logger abstraction.
             timer: Cross-platform timeout runner.
             timeout_ms: Per-validation wall-clock budget in milliseconds.
+            fail_mode: Behaviour on a failing validation —
+                :attr:`FailMode.STRICT` raises,
+                :attr:`FailMode.DEGRADE` logs and returns,
+                :attr:`FailMode.SILENT` returns without error logging.
         """
         self.schema_storage = schema_storage
         self.validator = validator
@@ -49,6 +59,7 @@ class ValidateContractUseCase:
         self.logger = logger
         self.timer = timer
         self.timeout_ms = timeout_ms
+        self.fail_mode = fail_mode
 
     def execute(
         self,
@@ -73,13 +84,16 @@ class ValidateContractUseCase:
             The :class:`ValidationResult` (possibly ``degraded``).
 
         Raises:
-            ValueError: If no schema is cached for *contract_id*.
+            CongineContractNotFoundError: If no schema is cached for
+                *contract_id*.
+            CongineValidationError: If the result is a failure and the
+                configured :class:`FailMode` is :attr:`FailMode.STRICT`.
         """
         # Step 1: Fetch schema.
         schema = self.schema_storage.get(contract_id)
         if schema is None:
             self.logger.error("Schema not found", contract_id=contract_id)
-            raise ValueError(f"Schema {contract_id} not found")
+            raise CongineContractNotFoundError(f"Schema {contract_id} not found")
 
         # Step 2: Validate with timeout.
         def do_validate() -> ValidationResult:
@@ -102,7 +116,8 @@ class ValidateContractUseCase:
             )
             result = ValidationResult(status="fail", degraded=True)
 
-        # Step 3: Publish telemetry (fire-and-forget).
+        # Step 3: Publish telemetry (fire-and-forget). Published BEFORE any
+        # fail-mode escalation so a STRICT raise never loses the event.
         event = TelemetryEvent(
             contract_id=contract_id,
             contract_version=contract_version,
@@ -115,4 +130,50 @@ class ValidateContractUseCase:
         )
         self.event_bus.publish(event)
 
+        # Step 4: Enforce fail mode on a failing result.
+        if not result.is_pass():
+            self._handle_failure(result, contract_id, contract_version)
+
         return result
+
+    def _handle_failure(
+        self,
+        result: ValidationResult,
+        contract_id: str,
+        contract_version: str,
+    ) -> None:
+        """Apply the configured :class:`FailMode` to a failing *result*.
+
+        Args:
+            result: The failing validation result.
+            contract_id: Identifier of the validated contract.
+            contract_version: Version of the validated contract.
+
+        Raises:
+            CongineValidationError: When :attr:`FailMode.STRICT` is configured.
+        """
+        if self.fail_mode is FailMode.SILENT:
+            # Swallow: no error logging, no raise — caller inspects the result.
+            return
+
+        if self.fail_mode is FailMode.STRICT:
+            self.logger.error(
+                "Validation failed (strict)",
+                contract_id=contract_id,
+                contract_version=contract_version,
+                breaches=len(result.breaches),
+                degraded=result.degraded,
+            )
+            raise CongineValidationError(
+                f"Contract {contract_id} validation failed "
+                f"with {len(result.breaches)} breach(es)"
+            )
+
+        # FailMode.DEGRADE (default): log and continue.
+        self.logger.warning(
+            "Validation failed (degrade)",
+            contract_id=contract_id,
+            contract_version=contract_version,
+            breaches=len(result.breaches),
+            degraded=result.degraded,
+        )

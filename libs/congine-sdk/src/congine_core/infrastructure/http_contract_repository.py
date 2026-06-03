@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 import httpx
 
 from congine_core.config import CongineConfig
+from congine_core.exceptions import CongineSyncError
 from congine_core.repositories.logger import ILogger
 
 #: Directory and path for the on-disk snapshot (cross-platform).
@@ -43,27 +44,40 @@ class HttpContractRepository:
     async def fetch_active_contracts(self) -> List[Dict]:
         """Fetch active contracts from the control plane.
 
+        Tenant/project/api-key headers are attached to every request so the
+        control plane can enforce isolation at the wire.
+
         Returns:
             The ``contracts`` list from the control-plane response.
 
         Raises:
-            httpx.HTTPError: On transport failure or non-2xx response.
-            KeyError: If the response body omits the ``contracts`` key.
+            CongineSyncError: On any transport failure, non-2xx response, or a
+                malformed body lacking the ``contracts`` key. Callers degrade to
+                :meth:`load_snapshot` so a cold network never hard-fails boot.
         """
         headers = {
             "X-API-Key": self.config.api_key or "",
             "X-Project-ID": self.config.project_id or "",
             "X-Tenant-ID": self.config.tenant_id or "",
         }
+        url = f"{self.config.base_url}/api/v1/contracts/active"
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{self.config.base_url}/api/v1/contracts/active",
-                headers=headers,
-            )
-            response.raise_for_status()
-            data = response.json()
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
             return data["contracts"]
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            if self.logger is not None:
+                self.logger.error(
+                    "Contract fetch failed",
+                    url=url,
+                    error=str(exc),
+                )
+            raise CongineSyncError(
+                f"Failed to fetch active contracts from {url}"
+            ) from exc
 
     def load_snapshot(self) -> Optional[List[Dict]]:
         """Load contracts from the disk snapshot (stale-ok fallback).

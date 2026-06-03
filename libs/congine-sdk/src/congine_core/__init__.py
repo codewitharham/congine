@@ -40,6 +40,7 @@ from congine_core.adapters import ServiceContainer, congine_guard
 # Config & exceptions
 from congine_core.config import CongineConfig, FailMode, Region
 from congine_core.exceptions import (
+    CongineBaseException,
     CongineCacheError,
     CongineConfigurationError,
     CongineContractNotFoundError,
@@ -82,6 +83,7 @@ __all__ = [
     "Region",
     "FailMode",
     # Exceptions
+    "CongineBaseException",
     "CongineValidationError",
     "CongineContractNotFoundError",
     "CongineConfigurationError",

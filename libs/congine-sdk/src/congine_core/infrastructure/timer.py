@@ -48,6 +48,14 @@ class ValidationTimer:
         except concurrent.futures.TimeoutError as exc:
             raise TimeoutError(f"Timeout after {timeout_ms}ms") from exc
 
+    def shutdown(self, wait: bool = False) -> None:
+        """Shut the executor down (idempotent).
+
+        Args:
+            wait: When ``True`` block until running futures complete.
+        """
+        self._executor.shutdown(wait=wait)
+
     def _cleanup(self) -> None:
         """Shut the executor down on interpreter exit (best-effort)."""
-        self._executor.shutdown(wait=False)
+        self.shutdown(wait=False)

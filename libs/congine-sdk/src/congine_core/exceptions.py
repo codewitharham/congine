@@ -1,8 +1,13 @@
 """Canonical Congine exceptions.
 
-Tier 1 exposes the six canonical exception types raised throughout the SDK.
+Tier 1 exposes a single root (:class:`CongineBaseException`) and the six
+canonical exception types raised throughout the SDK — every concrete error
+derives from the root so host code can guard the entire SDK with one
+``except CongineBaseException`` clause.
+
 Tier 2 provides semantic aliases that map onto the canonical types for
-backwards/ergonomic compatibility.
+backwards/ergonomic compatibility. Aliases are assignment-bound to their
+canonical class — they are never independent subclasses.
 
 This module has zero internal dependencies and may be imported from any layer.
 """
@@ -13,27 +18,35 @@ from __future__ import annotations
 # --------------------------------------------------------------------------- #
 # Tier 1: Canonical exceptions
 # --------------------------------------------------------------------------- #
-class CongineValidationError(Exception):
+class CongineBaseException(Exception):
+    """Root of the Congine exception tree.
+
+    Every Congine error derives from this class, so a single
+    ``except CongineBaseException`` clause guards the whole SDK.
+    """
+
+
+class CongineValidationError(CongineBaseException):
     """Validation logic breach (includes contract violations)."""
 
 
-class CongineContractNotFoundError(Exception):
+class CongineContractNotFoundError(CongineBaseException):
     """Schema/contract not found."""
 
 
-class CongineConfigurationError(Exception):
+class CongineConfigurationError(CongineBaseException):
     """Configuration is invalid."""
 
 
-class CongineSyncError(Exception):
+class CongineSyncError(CongineBaseException):
     """Synchronization with control plane failed."""
 
 
-class CongineCacheError(Exception):
+class CongineCacheError(CongineBaseException):
     """Cache operation failed."""
 
 
-class CongineTelemetryError(Exception):
+class CongineTelemetryError(CongineBaseException):
     """Telemetry publishing failed."""
 
 
@@ -48,6 +61,7 @@ TenantIsolationViolationException = CongineValidationError
 
 __all__ = [
     # Tier 1
+    "CongineBaseException",
     "CongineValidationError",
     "CongineContractNotFoundError",
     "CongineConfigurationError",

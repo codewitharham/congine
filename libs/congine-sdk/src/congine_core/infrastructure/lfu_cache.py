@@ -11,25 +11,45 @@ concurrent use.
 
 from __future__ import annotations
 
+import atexit
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+#: Default interval, in seconds, between proactive TTL sweeps.
+_DEFAULT_SWEEP_INTERVAL = 30.0
 
 
 class LFUCache:
-    """Thread-safe Least-Frequently-Used cache with per-entry TTL."""
+    """Thread-safe Least-Frequently-Used cache with per-entry TTL.
 
-    def __init__(self, capacity: int = 500, ttl_seconds: int = 300) -> None:
+    A background daemon thread proactively purges TTL-expired entries every
+    ``sweep_interval`` seconds; :meth:`get`/:meth:`exists` also lazily expire on
+    read. The sweeper is a daemon (it never blocks interpreter exit) and is also
+    stopped via an :mod:`atexit` hook and the explicit :meth:`stop` method.
+    """
+
+    def __init__(
+        self,
+        capacity: int = 500,
+        ttl_seconds: int = 300,
+        sweep_interval: float = _DEFAULT_SWEEP_INTERVAL,
+        start_sweeper: bool = True,
+    ) -> None:
         """Args:
         capacity: Maximum number of entries; the least-frequently-used
             entry is evicted (FIFO among ties) when this is exceeded.
         ttl_seconds: Default time-to-live, in seconds, for stored entries.
+        sweep_interval: Seconds between proactive TTL sweeps by the daemon.
+        start_sweeper: When ``True`` (default) start the background sweeper
+            thread; pass ``False`` for deterministic, sweeper-free tests.
         """
         if capacity < 0:
             raise ValueError("capacity must be non-negative")
         self.capacity = capacity
         self.ttl_seconds = ttl_seconds
+        self.sweep_interval = sweep_interval
 
         # contract_id -> (schema, expire_monotonic)
         self._key_to_value: Dict[str, Tuple[Dict[str, Any], float]] = {}
@@ -40,6 +60,18 @@ class LFUCache:
         self._min_freq = 0
 
         self._lock = threading.RLock()
+
+        # --- Background TTL sweeper ------------------------------------- #
+        self._stop_event = threading.Event()
+        self._sweeper: Optional[threading.Thread] = None
+        if start_sweeper:
+            self._sweeper = threading.Thread(
+                target=self._sweep_loop,
+                name="congine_cache_sweeper",
+                daemon=True,
+            )
+            self._sweeper.start()
+            atexit.register(self.stop)
 
     # ------------------------------------------------------------------ #
     # Public API (ISchemaStorage)
@@ -163,3 +195,38 @@ class LFUCache:
                         self._min_freq = (
                             min(self._freq_to_keys) if self._freq_to_keys else 0
                         )
+
+    # ------------------------------------------------------------------ #
+    # Background TTL sweeper
+    # ------------------------------------------------------------------ #
+    def _sweep_loop(self) -> None:
+        """Daemon loop: purge expired entries every ``sweep_interval`` seconds.
+
+        Uses :meth:`threading.Event.wait` so a :meth:`stop` request wakes the
+        thread promptly instead of waiting out the full interval.
+        """
+        while not self._stop_event.wait(self.sweep_interval):
+            self.sweep_expired()
+
+    def sweep_expired(self) -> int:
+        """Evict every TTL-expired entry now.
+
+        Safe to call directly (e.g. from tests) regardless of the sweeper
+        thread. Returns the number of entries evicted.
+        """
+        with self._lock:
+            expired: List[str] = [
+                key
+                for key, (_schema, expire_at) in self._key_to_value.items()
+                if self._is_expired(expire_at)
+            ]
+            for key in expired:
+                self._evict_key(key)
+            return len(expired)
+
+    def stop(self) -> None:
+        """Stop the background sweeper thread (idempotent)."""
+        self._stop_event.set()
+        sweeper = self._sweeper
+        if sweeper is not None and sweeper.is_alive():
+            sweeper.join(timeout=self.sweep_interval + 1.0)
