@@ -1,5 +1,5 @@
 def main():
-    print("Hello from congine-core-engine!")
+    print("Hello from congine-sdk!")
 
 
 if __name__ == "__main__":

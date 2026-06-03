@@ -1,10 +1,9 @@
 Metadata-Version: 2.4
-Name: amce-core-engine
+Name: congine-sdk
 Version: 0.1.0
 Requires-Python: >=3.14
-Requires-Dist: httpx>=0.28.1
-Requires-Dist: jsonpatch>=1.33
-Requires-Dist: jsonschema>=4.26.0
 Requires-Dist: pydantic>=2.13.4
 Requires-Dist: pytest>=9.0.3
 Requires-Dist: ruff>=0.15.15
+Requires-Dist: httpx>=0.28
+Requires-Dist: jsonschema>=4.23
