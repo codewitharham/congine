@@ -66,7 +66,7 @@ def test_telemetry_event_preserves_supplied_values() -> None:
     assert ev.created_at == when
 
 
-def test_telemetry_event_is_mutable() -> None:
+def test_telemetry_event_is_frozen() -> None:
     ev = TelemetryEvent("c", "1", "pass", 0.0)
-    ev.status = "fail"  # mutable by design (post-init defaulting)
-    assert ev.status == "fail"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ev.status = "fail"  # frozen (L7): cannot race the drain worker

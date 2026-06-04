@@ -9,6 +9,7 @@ utility, typed under ``TYPE_CHECKING`` to keep this layer decoupled from Layer 4
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from congine_core.config import FailMode
@@ -89,35 +90,107 @@ class ValidateContractUseCase:
             CongineValidationError: If the result is a failure and the
                 configured :class:`FailMode` is :attr:`FailMode.STRICT`.
         """
-        # Step 1: Fetch schema.
+        schema = self._resolve_schema(contract_id)
+
+        def do_validate() -> ValidationResult:
+            return self.validator.validate(payload, schema)
+
+        started = time.perf_counter()
+        try:
+            result = self.timer.run_with_timeout(do_validate, self.timeout_ms)
+        except TimeoutError:
+            result = self._degraded_on_timeout(contract_id, started)
+        except Exception as exc:  # noqa: BLE001 - degrade, but surface the cause
+            result = self._degraded_on_error(contract_id, started, exc)
+
+        return self._finalize(result, contract_id, contract_version)
+
+    async def execute_async(
+        self,
+        payload: dict,
+        contract_id: str,
+        contract_version: str,
+    ) -> ValidationResult:
+        """Async twin of :meth:`execute` for callers inside an event loop.
+
+        Runs the *identical* workflow — schema resolution, telemetry, fail-mode
+        enforcement — but offloads the synchronous validation onto the bounded,
+        load-shedding pool via ``run_with_timeout_async``. Async callers thus get
+        the **same** capacity bound and timeout as sync callers (audit H1/H2),
+        instead of the raw, unbounded ``run_in_executor`` that bypassed both.
+
+        Requires the injected ``timer`` to expose ``run_with_timeout_async``
+        (the :class:`BoundedValidationExecutor` does); falls back to the sync
+        timeout path if it does not.
+        """
+        schema = self._resolve_schema(contract_id)
+
+        def do_validate() -> ValidationResult:
+            return self.validator.validate(payload, schema)
+
+        run_async = getattr(self.timer, "run_with_timeout_async", None)
+        started = time.perf_counter()
+        try:
+            if run_async is not None:
+                result = await run_async(do_validate, self.timeout_ms)
+            else:  # pragma: no cover - only when a non-bounded timer is injected
+                result = self.timer.run_with_timeout(do_validate, self.timeout_ms)
+        except TimeoutError:
+            result = self._degraded_on_timeout(contract_id, started)
+        except Exception as exc:  # noqa: BLE001 - degrade, but surface the cause
+            result = self._degraded_on_error(contract_id, started, exc)
+
+        return self._finalize(result, contract_id, contract_version)
+
+    # ------------------------------------------------------------------ #
+    # Shared workflow helpers (used by both sync and async entry points)
+    # ------------------------------------------------------------------ #
+    def _resolve_schema(self, contract_id: str) -> dict:
+        """Return the cached schema or raise :class:`CongineContractNotFoundError`."""
         schema = self.schema_storage.get(contract_id)
         if schema is None:
             self.logger.error("Schema not found", contract_id=contract_id)
             raise CongineContractNotFoundError(f"Schema {contract_id} not found")
+        return schema
 
-        # Step 2: Validate with timeout.
-        def do_validate() -> ValidationResult:
-            return self.validator.validate(payload, schema)
+    def _degraded_on_timeout(
+        self, contract_id: str, started: float
+    ) -> ValidationResult:
+        """Build the degraded result for a validation that overran its budget."""
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        self.logger.warning(
+            "Validation timeout",
+            contract_id=contract_id,
+            timeout_ms=self.timeout_ms,
+        )
+        return ValidationResult(status="fail", degraded=True, duration_ms=elapsed_ms)
 
-        try:
-            result = self.timer.run_with_timeout(do_validate, self.timeout_ms)
-        except TimeoutError:
-            self.logger.warning(
-                "Validation timeout",
-                contract_id=contract_id,
-                timeout_ms=self.timeout_ms,
-            )
-            result = ValidationResult(status="fail", degraded=True)
-        except Exception as exc:  # noqa: BLE001 - degrade on any validation error
-            self.logger.error(
-                "Validation error",
-                contract_id=contract_id,
-                error=str(exc),
-            )
-            result = ValidationResult(status="fail", degraded=True)
+    def _degraded_on_error(
+        self, contract_id: str, started: float, exc: Exception
+    ) -> ValidationResult:
+        """Build the degraded result for an unexpected validation defect (M3)."""
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        # Do not silently mask unexpected defects — tag the exception type so a
+        # masked bug is observable in logs and telemetry latency.
+        self.logger.error(
+            "Validation error",
+            contract_id=contract_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return ValidationResult(status="fail", degraded=True, duration_ms=elapsed_ms)
 
-        # Step 3: Publish telemetry (fire-and-forget). Published BEFORE any
-        # fail-mode escalation so a STRICT raise never loses the event.
+    def _finalize(
+        self,
+        result: ValidationResult,
+        contract_id: str,
+        contract_version: str,
+    ) -> ValidationResult:
+        """Publish telemetry then enforce fail mode; return *result*.
+
+        Telemetry is published BEFORE any fail-mode escalation so a STRICT raise
+        never loses the event.
+        """
         event = TelemetryEvent(
             contract_id=contract_id,
             contract_version=contract_version,
@@ -130,7 +203,6 @@ class ValidateContractUseCase:
         )
         self.event_bus.publish(event)
 
-        # Step 4: Enforce fail mode on a failing result.
         if not result.is_pass():
             self._handle_failure(result, contract_id, contract_version)
 

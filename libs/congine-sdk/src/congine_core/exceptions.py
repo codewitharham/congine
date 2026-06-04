@@ -51,8 +51,14 @@ class CongineTelemetryError(CongineBaseException):
 
 
 # --------------------------------------------------------------------------- #
-# Tier 2: Semantic aliases (for backwards compatibility)
+# Tier 2: Semantic aliases (compatibility shims)
 # --------------------------------------------------------------------------- #
+# These are assignment-bound to canonical classes, never independent subclasses.
+# Note (audit L4): not all are raised by the current SDK — a validation timeout
+# degrades to a ``ValidationResult(degraded=True)`` rather than raising
+# ``ValidationTimeoutException``, and ``TenantIsolationViolationException`` is a
+# forward-compat placeholder. They exist so host ``except`` clauses written
+# against these names keep working; prefer the canonical Tier-1 types.
 ContractBreachException = CongineValidationError
 SchemaCacheMissException = CongineContractNotFoundError
 ValidationTimeoutException = CongineValidationError

@@ -3,27 +3,44 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import inspect
+import types
 from typing import Any, Dict, List, Tuple
 
+import pytest
+
 from congine_core.adapters.guard import congine_guard
-from congine_core.domain.models import ValidationResult
+from congine_core.domain.models import BreachDetail, ValidationResult
+from congine_core.exceptions import CongineValidationError
 
 
 class _FakeUseCase:
-    def __init__(self) -> None:
+    def __init__(self, status: str = "pass") -> None:
         self.calls: List[Tuple[Any, str, str]] = []
+        self._status = status
 
     def execute(
         self, payload: Any, contract_id: str, contract_version: str
     ) -> ValidationResult:
         self.calls.append((payload, contract_id, contract_version))
-        return ValidationResult(status="pass")
+        breaches = () if self._status == "pass" else (BreachDetail("X", "y"),)
+        return ValidationResult(status=self._status, breaches=breaches)
+
+    async def execute_async(
+        self, payload: Any, contract_id: str, contract_version: str
+    ) -> ValidationResult:
+        # The async guard now routes through execute_async (bounded + timed).
+        return self.execute(payload, contract_id, contract_version)
 
 
 class _FakeContainer:
     def __init__(self) -> None:
         self.validate_contract_usecase = _FakeUseCase()
+        # The async guard offloads execute() onto this pool (H2).
+        self.validation_executor = types.SimpleNamespace(
+            thread_pool=concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        )
 
 
 def test_sync_wrapper_returns_output_and_result() -> None:
@@ -76,3 +93,57 @@ def test_default_version_is_latest() -> None:
 
     f()
     assert container.validate_contract_usecase.calls[0][2] == "latest"
+
+
+# --- M5: return modes + extractor ------------------------------------------ #
+
+
+def test_mode_output_returns_raw_output() -> None:
+    container = _FakeContainer()
+
+    @congine_guard("c", container=container, mode="output")
+    def f() -> dict:
+        return {"a": 1}
+
+    assert f() == {"a": 1}  # no envelope
+    assert container.validate_contract_usecase.calls  # validation still ran
+
+
+def test_mode_raise_raises_on_failure() -> None:
+    container = _FakeContainer()
+    container.validate_contract_usecase = _FakeUseCase(status="fail")
+
+    @congine_guard("c", container=container, mode="raise")
+    def f() -> dict:
+        return {"a": 1}
+
+    with pytest.raises(CongineValidationError):
+        f()
+
+
+def test_mode_raise_returns_output_on_pass() -> None:
+    container = _FakeContainer()
+
+    @congine_guard("c", container=container, mode="raise")
+    def f() -> dict:
+        return {"a": 1}
+
+    assert f() == {"a": 1}
+
+
+def test_extractor_wraps_non_dict_output() -> None:
+    container = _FakeContainer()
+
+    @congine_guard(
+        "c", container=container, mode="output", extractor=lambda s: {"text": s}
+    )
+    def f() -> str:
+        return "hello"
+
+    assert f() == "hello"  # original output preserved
+    assert container.validate_contract_usecase.calls[0][0] == {"text": "hello"}
+
+
+def test_invalid_mode_rejected() -> None:
+    with pytest.raises(ValueError):
+        congine_guard("c", mode="bogus")

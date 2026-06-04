@@ -136,6 +136,11 @@ class LFUCache:
             self._freq_to_keys.clear()
             self._min_freq = 0
 
+    def size(self) -> int:
+        """Return the number of cached entries (including not-yet-swept stale)."""
+        with self._lock:
+            return len(self._key_to_value)
+
     def exists(self, contract_id: str) -> bool:
         """Return ``True`` if *contract_id* is cached and not expired."""
         with self._lock:
@@ -170,10 +175,18 @@ class LFUCache:
         self._freq_to_keys.setdefault(new_freq, OrderedDict())[key] = None
 
     def _evict_lfu(self) -> None:
-        """Evict the least-frequently-used key (FIFO among equal frequency)."""
+        """Evict the least-frequently-used key (FIFO among equal frequency).
+
+        Runs only on a capacity-full insert (rare). ``_min_freq`` may be stale if
+        a TTL expiry emptied the min bucket without a scan (M4); reconcile it
+        here — off the get/put hot path — instead of scanning on every expiry.
+        """
         bucket = self._freq_to_keys.get(self._min_freq)
         if not bucket:
-            return
+            if not self._freq_to_keys:
+                return
+            self._min_freq = min(self._freq_to_keys)
+            bucket = self._freq_to_keys[self._min_freq]
         key, _ = bucket.popitem(last=False)
         if not bucket:
             del self._freq_to_keys[self._min_freq]
@@ -181,7 +194,12 @@ class LFUCache:
         self._key_to_freq.pop(key, None)
 
     def _evict_key(self, key: str) -> None:
-        """Remove *key* from every internal structure."""
+        """Remove *key* from every internal structure.
+
+        Kept O(1): does NOT recompute ``_min_freq`` (no scan). Any resulting
+        staleness is reconciled lazily by :meth:`_evict_lfu`, and the next
+        :meth:`put` resets ``_min_freq`` to 1 regardless.
+        """
         freq = self._key_to_freq.pop(key, None)
         self._key_to_value.pop(key, None)
         if freq is not None:
@@ -190,11 +208,6 @@ class LFUCache:
                 bucket.pop(key, None)
                 if not bucket:
                     del self._freq_to_keys[freq]
-                    if self._min_freq == freq:
-                        # Recompute the minimum frequency among remaining keys.
-                        self._min_freq = (
-                            min(self._freq_to_keys) if self._freq_to_keys else 0
-                        )
 
     # ------------------------------------------------------------------ #
     # Background TTL sweeper

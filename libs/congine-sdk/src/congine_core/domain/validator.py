@@ -8,9 +8,11 @@ inheritance) into an :class:`IValidator`.
 
 from __future__ import annotations
 
+import functools
 import re
 import time
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -22,6 +24,32 @@ from typing import (
 )
 
 from congine_core.domain.models import BreachDetail, ValidationResult
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from congine_core.repositories.semantic_validator import ISemanticValidator
+
+# --- ReDoS guard (audit H3) ------------------------------------------------- #
+#: Reject schema-supplied patterns longer than this (untrusted-input budget).
+_MAX_PATTERN_LENGTH = 1000
+#: Fail-closed: do not run a backtracking regex against values longer than this.
+_MAX_REGEX_VALUE_LENGTH = 50_000
+
+try:  # Optional linear-time engine; immune to catastrophic backtracking.
+    import re2 as _re2  # type: ignore[import-not-found]
+
+    _RE2_AVAILABLE = True
+except ImportError:  # pragma: no cover - re2 is an optional, undeclared backend
+    _re2 = None
+    _RE2_AVAILABLE = False
+
+
+@functools.lru_cache(maxsize=512)
+def _compiled_pattern(pattern: str):
+    """Compile and cache *pattern* (re2 when available, else stdlib ``re``)."""
+    if _RE2_AVAILABLE:
+        return _re2.compile(pattern)
+    return re.compile(pattern)
+
 
 #: Mapping from JSON-schema type names to acceptable Python types. ``bool`` is
 #: deliberately excluded from the numeric types (a bool is not a number here).
@@ -212,9 +240,41 @@ class RuleEngine:
             pattern = spec.get("pattern") if isinstance(spec, dict) else spec
             if not pattern:
                 continue
-            # Anchored full-string match: the entire value must satisfy the
-            # pattern (re.fullmatch), not merely contain a match.
-            if re.fullmatch(pattern, value) is None:
+            # ReDoS guard (H3): schema patterns are untrusted input. Cap pattern
+            # and value length (fail-closed), cache compiled patterns, and use a
+            # linear-time engine (re2) when available. A pathological pattern can
+            # therefore not burn unbounded CPU on the validation hot path.
+            if len(pattern) > _MAX_PATTERN_LENGTH:
+                breaches.append(
+                    BreachDetail(
+                        rule="REGEX_PATTERN",
+                        field=field_name,
+                        message=f"Pattern for '{field_name}' exceeds the safe length budget",
+                    )
+                )
+                continue
+            if len(value) > _MAX_REGEX_VALUE_LENGTH:
+                breaches.append(
+                    BreachDetail(
+                        rule="REGEX_PATTERN",
+                        field=field_name,
+                        message=f"Value for '{field_name}' is too long to match safely",
+                    )
+                )
+                continue
+            try:
+                matched = _compiled_pattern(pattern).fullmatch(value) is not None
+            except re.error:
+                breaches.append(
+                    BreachDetail(
+                        rule="REGEX_PATTERN",
+                        field=field_name,
+                        message=f"Invalid regex pattern for '{field_name}'",
+                    )
+                )
+                continue
+            # Anchored full-string match: the entire value must satisfy it.
+            if not matched:
                 breaches.append(
                     BreachDetail(
                         rule="REGEX_PATTERN",
@@ -336,4 +396,55 @@ class LocalValidator:
             status=status,
             breaches=tuple(all_breaches),
             duration_ms=duration_ms,
+        )
+
+
+class CompositeValidator:
+    """Compose a rule-based :class:`IValidator` with an :class:`ISemanticValidator`.
+
+    Both collaborators are constructor-injected (composition, not inheritance);
+    the semantic validator is consumed purely through its protocol so the domain
+    never imports a concrete (e.g. ``jsonschema``-backed) implementation. The
+    result merges every rule breach with every semantic breach into a single
+    :class:`ValidationResult`.
+    """
+
+    def __init__(
+        self,
+        rule_validator: "IValidator",
+        semantic_validator: "ISemanticValidator",
+    ) -> None:
+        """Constructor injection of both validation strategies.
+
+        Args:
+            rule_validator: The rule-engine validator (e.g. ``LocalValidator``).
+            semantic_validator: A full-schema validator injected via its
+                Layer-1 protocol.
+        """
+        self.rule_validator = rule_validator
+        self.semantic_validator = semantic_validator
+
+    def validate(self, payload: dict, schema: dict) -> ValidationResult:
+        """Run both validators and merge their breaches.
+
+        Args:
+            payload: The data to validate.
+            schema: The contract schema.
+
+        Returns:
+            A :class:`ValidationResult` that fails if *either* validator finds a
+            breach; ``duration_ms`` spans the combined run and ``degraded``
+            propagates from the rule validator.
+        """
+        start = time.perf_counter()
+        rule_result = self.rule_validator.validate(payload, schema)
+        breaches: List[BreachDetail] = list(rule_result.breaches)
+        breaches.extend(self.semantic_validator.validate(payload, schema))
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        status = "pass" if not breaches else "fail"
+        return ValidationResult(
+            status=status,
+            breaches=tuple(breaches),
+            duration_ms=duration_ms,
+            degraded=rule_result.degraded,
         )

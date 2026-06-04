@@ -51,6 +51,10 @@ class FakeEventBus:
     def stop(self, drain: bool = True) -> None:
         """No-op: present so a container.close() can treat it like the real bus."""
 
+    def queue_depth(self) -> int:
+        """Mirror QueueEventBus.queue_depth for health() snapshots."""
+        return len(self.published)
+
 
 class FakeSchemaStorage:
     """In-memory :class:`ISchemaStorage` test double (no TTL/LFU)."""
@@ -78,6 +82,41 @@ class ImmediateTimer:
 
     def run_with_timeout(self, func: Any, timeout_ms: int) -> Any:
         return func()
+
+
+class FakeContractRepository:
+    """:class:`IContractRepository` test double.
+
+    ``fetch_active_contracts`` returns *contracts* unless *fetch_error* is set
+    (then it raises it). ``load_snapshot`` returns *snapshot*. ``save_snapshot``
+    records into ``saved`` unless *save_error* is set (then it raises it).
+    """
+
+    def __init__(
+        self,
+        contracts: Optional[List[Dict[str, Any]]] = None,
+        fetch_error: Optional[BaseException] = None,
+        snapshot: Optional[List[Dict[str, Any]]] = None,
+        save_error: Optional[BaseException] = None,
+    ) -> None:
+        self._contracts = contracts
+        self._fetch_error = fetch_error
+        self._snapshot = snapshot
+        self._save_error = save_error
+        self.saved: Optional[List[Dict[str, Any]]] = None
+
+    async def fetch_active_contracts(self) -> List[Dict[str, Any]]:
+        if self._fetch_error is not None:
+            raise self._fetch_error
+        return self._contracts or []
+
+    def load_snapshot(self) -> Optional[List[Dict[str, Any]]]:
+        return self._snapshot
+
+    def save_snapshot(self, contracts: List[Dict[str, Any]]) -> None:
+        if self._save_error is not None:
+            raise self._save_error
+        self.saved = contracts
 
 
 @pytest.fixture

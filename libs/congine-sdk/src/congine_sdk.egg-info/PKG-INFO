@@ -9,3 +9,7 @@ Requires-Dist: pytest-cov>=6.0
 Requires-Dist: ruff>=0.15.15
 Requires-Dist: httpx>=0.28
 Requires-Dist: jsonschema>=4.23
+Provides-Extra: langchain
+Requires-Dist: langchain-core<0.4,>=0.3; extra == "langchain"
+Provides-Extra: stats
+Requires-Dist: numpy>=1.26; extra == "stats"

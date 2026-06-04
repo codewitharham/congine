@@ -1,15 +1,27 @@
 [project]
 name = "congine-sdk"
 version = "0.1.0"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
-    "pydantic>=2.13.4",
-    "pytest>=9.0.3",
+    "httpx>=0.28",
+    "jsonschema>=4.23",
+    "portalocker>=2.8",
+]
+
+[project.optional-dependencies]
+# Optional LangChain integration. Core SDK stays langchain-free; install with
+# `pip install congine-sdk[langchain]` to use CongineCallbackHandler.
+langchain = ["langchain-core>=0.3,<0.4"]
+# Optional math extension for the KS drift engine. Core SDK does not require
+# numpy; install with `pip install congine-sdk[stats]` to use KSDriftEngine.detect.
+stats = ["numpy>=1.26"]
+# Development / test toolchain. NOT shipped to runtime consumers; install with
+# `pip install congine-sdk[dev]` (or `uv sync --extra dev`).
+dev = [
+    "pytest>=8.0",
     "pytest-asyncio>=1.0",
     "pytest-cov>=6.0",
     "ruff>=0.15.15",
-    "httpx>=0.28",
-    "jsonschema>=4.23",
 ]
 
 [tool.uv]

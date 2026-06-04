@@ -11,7 +11,7 @@ from congine_core.adapters.guard import congine_guard
 from congine_core.config import CongineConfig, FailMode, Region
 from congine_core.exceptions import CongineSyncError, CongineValidationError
 from congine_core.adapters.dependency_injection import ServiceContainer
-from tests.conftest import FakeEventBus
+from tests.conftest import FakeContractRepository, FakeEventBus
 
 _SCHEMA = {
     "required": ["score", "label"],
@@ -148,7 +148,7 @@ class _FakeRepoOffline:
 def test_bootstrap_primes_cache_online() -> None:
     container = _container()
     try:
-        container.contract_repository = _FakeRepoOnline()
+        container.sync_contracts_usecase.contract_repository = _FakeRepoOnline()
         loaded = container.bootstrap()
         assert loaded == 2
         assert container.schema_storage.exists("c1")
@@ -161,7 +161,7 @@ def test_bootstrap_primes_cache_online() -> None:
 def test_bootstrap_falls_back_to_snapshot() -> None:
     container = _container()
     try:
-        container.contract_repository = _FakeRepoOffline()
+        container.sync_contracts_usecase.contract_repository = _FakeRepoOffline()
         loaded = container.bootstrap()
         assert loaded == 1
         assert container.schema_storage.exists("snap-1")
@@ -176,3 +176,97 @@ def test_container_context_manager_closes() -> None:
         assert container.schema_storage.exists("c")
     # After exit, the cache sweeper is stopped.
     assert container.schema_storage._stop_event.is_set()
+
+
+def test_bootstrap_starts_background_worker_when_enabled() -> None:
+    cfg = CongineConfig(
+        base_url="http://control-plane.invalid",
+        api_key="k",
+        project_id="p",
+        tenant_id="t",
+        region=Region.US,
+        sync_enabled=True,
+        sync_interval_seconds=300,
+    )
+    container = ServiceContainer(cfg)
+    container.event_bus.stop(drain=False)
+    fake_bus = FakeEventBus()
+    container.event_bus = fake_bus
+    container.validate_contract_usecase.event_bus = fake_bus
+    container.sync_contracts_usecase.contract_repository = FakeContractRepository(
+        contracts=[{"id": "c1", "version": "1", "schema": _SCHEMA}]
+    )
+    try:
+        container.bootstrap()
+        assert container.sync_worker._thread is not None
+        assert container.sync_worker._thread.is_alive()
+        assert container.schema_storage.exists("c1")
+    finally:
+        container.close()
+    assert not container.sync_worker._thread.is_alive()
+
+
+def test_semantic_validation_enabled_uses_composite() -> None:
+    from congine_core.domain.validator import CompositeValidator
+
+    cfg = CongineConfig(
+        base_url="http://control-plane.invalid",
+        api_key="k",
+        project_id="p",
+        tenant_id="t",
+        region=Region.US,
+        semantic_validation_enabled=True,
+    )
+    container = ServiceContainer(cfg)
+    container.event_bus.stop(drain=False)
+    fake_bus = FakeEventBus()
+    container.event_bus = fake_bus
+    container.validate_contract_usecase.event_bus = fake_bus
+    try:
+        assert isinstance(container.validator, CompositeValidator)
+        json_schema = {
+            "type": "object",
+            "required": ["score"],
+            "properties": {"score": {"type": "number"}},
+        }
+        container.schema_storage.put("c", json_schema, 300)
+
+        @congine_guard("c", container=container)
+        def good() -> dict:
+            return {"score": 0.5}
+
+        @congine_guard("c", container=container)
+        def bad() -> dict:
+            return {"score": "high"}  # violates JSON Schema type
+
+        assert good()["validation_result"].is_pass()
+        assert not bad()["validation_result"].is_pass()
+    finally:
+        container.close()
+
+
+def test_semantic_validation_disabled_by_default() -> None:
+    from congine_core.domain.validator import LocalValidator
+
+    container = _container()  # default config → semantic disabled
+    try:
+        assert isinstance(container.validator, LocalValidator)
+    finally:
+        container.close()
+
+
+def test_langchain_handler_through_real_container() -> None:
+    pytest.importorskip("langchain_core")
+    from congine_core.adapters.langchain_handler import CongineCallbackHandler
+
+    container = _container()
+    try:
+        container.schema_storage.put("lc-contract", {}, 300)  # permissive schema
+        handler = CongineCallbackHandler("lc-contract", container=container)
+        for tok in ["hel", "lo ", "there"]:
+            handler.on_llm_new_token(tok, run_id="run-1")
+        result = handler.on_llm_end(run_id="run-1")
+        assert result is not None and result.is_pass()
+        assert len(container.event_bus.published) == 1
+    finally:
+        container.close()

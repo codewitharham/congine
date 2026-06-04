@@ -103,3 +103,39 @@ def test_from_env_bad_int(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONGINE_TIMEOUT_MS", "not-a-number")
     with pytest.raises(CongineConfigurationError):
         CongineConfig.from_env()
+
+
+def test_feature_flag_defaults() -> None:
+    cfg = CongineConfig(
+        base_url="http://x",
+        api_key=None,
+        project_id=None,
+        tenant_id=None,
+        region=Region.US,
+    )
+    assert cfg.sync_enabled is False
+    assert cfg.semantic_validation_enabled is False
+    assert cfg.drift_threshold == 0.1
+    assert cfg.drift_sample_limit == 500
+
+
+def test_from_env_reads_feature_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CONGINE_REGION", raising=False)
+    monkeypatch.delenv("CONGINE_FAIL_MODE", raising=False)
+    monkeypatch.setenv("CONGINE_SEMANTIC_VALIDATION", "true")
+    monkeypatch.setenv("CONGINE_SYNC_ENABLED", "yes")
+    monkeypatch.setenv("CONGINE_DRIFT_THRESHOLD", "0.25")
+    monkeypatch.setenv("CONGINE_DRIFT_SAMPLE_LIMIT", "250")
+    cfg = CongineConfig.from_env()
+    assert cfg.semantic_validation_enabled is True
+    assert cfg.sync_enabled is True
+    assert cfg.drift_threshold == 0.25
+    assert cfg.drift_sample_limit == 250
+
+
+def test_from_env_bad_float(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CONGINE_REGION", raising=False)
+    monkeypatch.delenv("CONGINE_FAIL_MODE", raising=False)
+    monkeypatch.setenv("CONGINE_DRIFT_THRESHOLD", "not-a-float")
+    with pytest.raises(CongineConfigurationError):
+        CongineConfig.from_env()

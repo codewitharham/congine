@@ -17,7 +17,7 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "uv run --package congine-sdk pytest libs/congine-sdk/tests"
+        "command": "uv run --package congine-sdk --extra langchain --extra stats pytest libs/congine-sdk/tests"
       }
     }
   }

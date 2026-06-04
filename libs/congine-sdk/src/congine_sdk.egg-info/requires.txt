@@ -5,3 +5,9 @@ pytest-cov>=6.0
 ruff>=0.15.15
 httpx>=0.28
 jsonschema>=4.23
+
+[langchain]
+langchain-core<0.4,>=0.3
+
+[stats]
+numpy>=1.26

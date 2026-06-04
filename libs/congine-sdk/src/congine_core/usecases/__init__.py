@@ -3,6 +3,7 @@
 Depends on: repositories (Layer 1), domain (Layer 2), and the timer utility.
 """
 
+from congine_core.usecases.sync_contracts_usecase import SyncContractsUseCase
 from congine_core.usecases.validate_contract_usecase import ValidateContractUseCase
 
-__all__ = ["ValidateContractUseCase"]
+__all__ = ["ValidateContractUseCase", "SyncContractsUseCase"]

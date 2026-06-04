@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Callable
 
 import httpx
@@ -16,6 +17,7 @@ from congine_core.infrastructure import http_contract_repository as repo_mod
 from congine_core.infrastructure.http_contract_repository import (
     HttpContractRepository,
 )
+from tests.conftest import FakeLogger
 
 
 def _config() -> CongineConfig:
@@ -92,34 +94,122 @@ async def test_fetch_missing_key_raises_sync_error(patch_async_client) -> None:
         await repo.fetch_active_contracts()
 
 
-def test_snapshot_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    snap = tmp_path / "snap.json"
-    monkeypatch.setattr(repo_mod, "_SNAPSHOT_DIR", str(tmp_path))
-    monkeypatch.setattr(repo_mod, "_SNAPSHOT_PATH", str(snap))
+def _config_with_dir(tmp_path) -> CongineConfig:
+    return CongineConfig(
+        base_url="http://cp.test",
+        api_key="key-123",
+        project_id="proj",
+        tenant_id="tenant",
+        region=Region.US,
+        snapshot_dir=str(tmp_path),
+    )
 
-    repo = HttpContractRepository(_config())
+
+def test_snapshot_round_trip(tmp_path) -> None:
+    repo = HttpContractRepository(_config_with_dir(tmp_path))
     contracts = [{"id": "c1", "version": "1", "schema": {"x": 1}}]
     repo.save_snapshot(contracts)
 
-    assert snap.exists()
+    assert os.path.exists(repo._snapshot_path)
     assert repo.load_snapshot() == contracts
-    # The persisted file carries metadata around the contracts.
-    body = json.loads(snap.read_text())
+    body = json.loads(open(repo._snapshot_path, encoding="utf-8").read())
     assert body["contracts"] == contracts
     assert "fetched_at" in body
 
 
-def test_load_snapshot_missing_returns_none(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    monkeypatch.setattr(repo_mod, "_SNAPSHOT_PATH", str(tmp_path / "nope.json"))
-    assert HttpContractRepository(_config()).load_snapshot() is None
+def test_snapshot_path_is_tenant_scoped(tmp_path) -> None:
+    # Different tenant/project → different snapshot file (C2: no cross-tenant).
+    cfg_a = CongineConfig(
+        base_url="http://cp.test",
+        api_key="k",
+        project_id="proj",
+        tenant_id="tenant-A",
+        region=Region.US,
+        snapshot_dir=str(tmp_path),
+    )
+    cfg_b = CongineConfig(
+        base_url="http://cp.test",
+        api_key="k",
+        project_id="proj",
+        tenant_id="tenant-B",
+        region=Region.US,
+        snapshot_dir=str(tmp_path),
+    )
+    repo_a = HttpContractRepository(cfg_a)
+    repo_b = HttpContractRepository(cfg_b)
+    assert repo_a._snapshot_path != repo_b._snapshot_path
+    repo_a.save_snapshot([{"id": "a", "schema": {}}])
+    # Tenant B sees no snapshot — it is isolated.
+    assert repo_b.load_snapshot() is None
 
 
-def test_load_snapshot_corrupt_returns_none(
+def test_load_snapshot_missing_returns_none(tmp_path) -> None:
+    assert HttpContractRepository(_config_with_dir(tmp_path)).load_snapshot() is None
+
+
+def test_load_snapshot_corrupt_returns_none(tmp_path) -> None:
+    repo = HttpContractRepository(_config_with_dir(tmp_path))
+    os.makedirs(repo._snapshot_dir, exist_ok=True)
+    with open(repo._snapshot_path, "w", encoding="utf-8") as fh:
+        fh.write("{ not json")
+    assert repo.load_snapshot() is None
+
+
+def test_load_snapshot_bad_envelope_returns_none(tmp_path) -> None:
+    repo = HttpContractRepository(_config_with_dir(tmp_path))
+    os.makedirs(repo._snapshot_dir, exist_ok=True)
+    # Valid JSON, wrong shape (contracts not a list).
+    with open(repo._snapshot_path, "w", encoding="utf-8") as fh:
+        json.dump({"version": "1.0", "contracts": {"oops": True}}, fh)
+    assert repo.load_snapshot() is None
+
+
+def test_validate_envelope_variants() -> None:
+    v = HttpContractRepository._validate_envelope
+    assert v("not a dict") is None
+    assert v({"contracts": "nope"}) is None
+    assert v({"contracts": []}) is None  # empty → None
+    assert v({"contracts": [{"id": "a"}, "junk", 5]}) == [{"id": "a"}]
+
+
+def test_default_snapshot_dir_is_per_user() -> None:
+    path = repo_mod._default_snapshot_dir()
+    assert isinstance(path, str)
+    assert "congine" in path
+    assert path != repo_mod.tempfile.gettempdir()  # not the world-shared root
+
+
+def test_load_refuses_foreign_owned_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    bad = tmp_path / "bad.json"
-    bad.write_text("{ not json")
-    monkeypatch.setattr(repo_mod, "_SNAPSHOT_PATH", str(bad))
-    assert HttpContractRepository(_config()).load_snapshot() is None
+    logger = FakeLogger()
+    repo = HttpContractRepository(_config_with_dir(tmp_path), logger=logger)
+    os.makedirs(repo._snapshot_dir, exist_ok=True)
+    with open(repo._snapshot_path, "w", encoding="utf-8") as fh:
+        json.dump({"contracts": [{"id": "x", "schema": {}}]}, fh)
+    monkeypatch.setattr(
+        HttpContractRepository, "_owned_by_current_user", staticmethod(lambda p: False)
+    )
+    assert repo.load_snapshot() is None
+    assert "WARNING" in logger.levels()
+
+
+def test_owned_by_current_user_non_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(repo_mod.os, "name", "nt")
+    assert HttpContractRepository._owned_by_current_user("anything") is True
+
+
+def test_save_snapshot_cleans_temp_on_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    repo = HttpContractRepository(_config_with_dir(tmp_path))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(repo_mod.json, "dump", boom)
+    with pytest.raises(RuntimeError):
+        repo.save_snapshot([{"id": "a", "schema": {}}])
+    # No stray temp files left behind in the snapshot dir.
+    leftovers = [p for p in os.listdir(repo._snapshot_dir) if p.endswith(".json")]
+    assert leftovers == []

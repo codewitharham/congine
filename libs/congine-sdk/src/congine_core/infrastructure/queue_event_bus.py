@@ -71,6 +71,7 @@ class QueueEventBus:
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
         self._client_factory = client_factory or (lambda: httpx.Client(timeout=10.0))
+        self._client: Optional[httpx.Client] = None
         self._stop_event = threading.Event()
         self._daemon: Optional[threading.Thread] = None
 
@@ -101,6 +102,10 @@ class QueueEventBus:
                     contract_id=getattr(event, "contract_id", None),
                 )
 
+    def queue_depth(self) -> int:
+        """Approximate number of telemetry events currently buffered."""
+        return self._queue.qsize()
+
     def stop(self, drain: bool = True) -> None:
         """Stop the drain worker, optionally flushing remaining events.
 
@@ -113,6 +118,15 @@ class QueueEventBus:
         daemon = self._daemon
         if daemon is not None and daemon.is_alive():
             daemon.join(timeout=2.0)
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+    def _get_client(self) -> httpx.Client:
+        """Return a reused, long-lived HTTP client (connection reuse)."""
+        if self._client is None:
+            self._client = self._client_factory()
+        return self._client
 
     # ------------------------------------------------------------------ #
     # Background worker
@@ -139,11 +153,15 @@ class QueueEventBus:
         return batch
 
     def _drain_on_exit(self) -> None:
-        """atexit hook: best-effort flush of queued events before shutdown."""
-        self._stop_event.set()
-        self._flush_remaining()
+        """atexit hook: bounded best-effort flush (M2 — must not stall exit).
 
-    def _flush_remaining(self) -> None:
+        Uses a single attempt per batch (no long backoff) so a dead control
+        plane cannot add retry×backoff seconds to interpreter shutdown.
+        """
+        self._stop_event.set()
+        self._flush_remaining(max_attempts=1)
+
+    def _flush_remaining(self, max_attempts: Optional[int] = None) -> None:
         """Ship every event currently in the queue (best-effort, bounded)."""
         while True:
             batch: List["TelemetryEvent"] = []
@@ -154,17 +172,25 @@ class QueueEventBus:
                     break
             if not batch:
                 return
-            self._ship(batch)
+            self._ship(batch, max_attempts=max_attempts)
 
     # ------------------------------------------------------------------ #
     # Shipping
     # ------------------------------------------------------------------ #
-    def _ship(self, batch: List["TelemetryEvent"]) -> bool:
+    def _ship(
+        self, batch: List["TelemetryEvent"], max_attempts: Optional[int] = None
+    ) -> bool:
         """Ship *batch* to the telemetry endpoint with exponential backoff.
 
-        Returns ``True`` on a successful POST. A batch that still fails after
-        ``max_retries`` attempts is dropped (returns ``False``) — telemetry is
-        fire-and-forget and must never raise to the host.
+        Reuses a single long-lived HTTP client across batches/retries (M2 —
+        connection reuse). Returns ``True`` on a successful POST; a batch that
+        still fails after the attempt budget is dropped (returns ``False``) —
+        telemetry is fire-and-forget and must never raise to the host.
+
+        Args:
+            batch: Events to ship.
+            max_attempts: Override the retry budget (used by the bounded
+                exit-flush to avoid stalling shutdown).
         """
         if self._config is None:
             # No control plane configured: drain-and-observe only.
@@ -172,6 +198,7 @@ class QueueEventBus:
                 self._logger.debug("Telemetry drained", count=len(batch))
             return True
 
+        attempts = max_attempts if max_attempts is not None else self._max_retries
         url = f"{self._config.base_url}{_TELEMETRY_PATH}"
         headers = {
             "X-API-Key": self._config.api_key or "",
@@ -181,11 +208,10 @@ class QueueEventBus:
         payload = {"events": [self._serialize(e) for e in batch]}
 
         delay = self._backoff_base
-        for attempt in range(1, self._max_retries + 1):
+        for attempt in range(1, attempts + 1):
             try:
-                with self._client_factory() as client:
-                    response = client.post(url, json=payload, headers=headers)
-                    response.raise_for_status()
+                response = self._get_client().post(url, json=payload, headers=headers)
+                response.raise_for_status()
                 if self._logger:
                     self._logger.debug(
                         "Telemetry shipped",
@@ -198,10 +224,10 @@ class QueueEventBus:
                     self._logger.warning(
                         "Telemetry ship failed",
                         attempt=attempt,
-                        max_retries=self._max_retries,
+                        max_retries=attempts,
                         error=str(exc),
                     )
-                if attempt >= self._max_retries:
+                if attempt >= attempts:
                     if self._logger:
                         self._logger.error(
                             "Telemetry chunk dropped after retries",

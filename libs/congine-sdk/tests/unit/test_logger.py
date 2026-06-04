@@ -10,7 +10,7 @@ from congine_core.infrastructure.logger import StructuredLogger
 
 
 def _emit(capsys: pytest.CaptureFixture[str], level: str, **kw: object) -> dict:
-    logger = StructuredLogger("congine-test")
+    logger = StructuredLogger("congine-test", level="DEBUG")
     getattr(logger, level)("hello", **kw)
     line = capsys.readouterr().out.strip()
     return json.loads(line)

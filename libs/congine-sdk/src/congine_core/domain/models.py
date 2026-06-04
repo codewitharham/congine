@@ -49,9 +49,32 @@ class ValidationResult:
         return self.status == "pass"
 
 
-@dataclass
+@dataclass(frozen=True)
+class DriftResult:
+    """Outcome of a two-sample drift test between a reference and a sample.
+
+    Attributes:
+        statistic: The Kolmogorov-Smirnov D statistic (max ECDF distance).
+        p_value: Asymptotic p-value for the two-sample KS test.
+        drift_detected: ``True`` when drift exceeds the configured threshold.
+        n_reference: Number of reference observations used.
+        n_sample: Number of current-sample observations used.
+    """
+
+    statistic: float
+    p_value: float
+    drift_detected: bool
+    n_reference: int
+    n_sample: int
+
+
+@dataclass(frozen=True)
 class TelemetryEvent:
     """A validation telemetry event published fire-and-forget.
+
+    Frozen (audit L7): once enqueued for the background drain worker, a caller
+    cannot mutate it and race the worker. Post-init defaulting uses
+    ``object.__setattr__`` as required for frozen dataclasses.
 
     Attributes:
         contract_id: Identifier of the validated contract.
@@ -71,6 +94,6 @@ class TelemetryEvent:
 
     def __post_init__(self) -> None:
         if self.breach_details is None:
-            self.breach_details = []
+            object.__setattr__(self, "breach_details", [])
         if self.created_at is None:
-            self.created_at = datetime.now(timezone.utc)
+            object.__setattr__(self, "created_at", datetime.now(timezone.utc))

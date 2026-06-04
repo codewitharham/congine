@@ -11,11 +11,14 @@ from congine_core.repositories import (
     IEventBus,
     ILogger,
     ISchemaStorage,
+    ISemanticValidator,
 )
 
 # Layer 2: Domain
 from congine_core.domain import (
     BreachDetail,
+    CompositeValidator,
+    DriftResult,
     LocalValidator,
     RuleEngine,
     TelemetryEvent,
@@ -23,11 +26,14 @@ from congine_core.domain import (
 )
 
 # Layer 3: Use cases
-from congine_core.usecases import ValidateContractUseCase
+from congine_core.usecases import SyncContractsUseCase, ValidateContractUseCase
 
 # Layer 4: Infrastructure
 from congine_core.infrastructure import (
+    BackgroundSyncWorker,
     HttpContractRepository,
+    JsonSchemaSemanticValidator,
+    KSDriftEngine,
     LFUCache,
     QueueEventBus,
     StructuredLogger,
@@ -61,20 +67,27 @@ __all__ = [
     "IContractRepository",
     "IEventBus",
     "ILogger",
+    "ISemanticValidator",
     # Domain
     "BreachDetail",
     "ValidationResult",
+    "DriftResult",
     "TelemetryEvent",
     "RuleEngine",
     "LocalValidator",
+    "CompositeValidator",
     # Use cases
     "ValidateContractUseCase",
+    "SyncContractsUseCase",
     # Infrastructure
     "LFUCache",
     "HttpContractRepository",
     "QueueEventBus",
     "StructuredLogger",
     "ValidationTimer",
+    "BackgroundSyncWorker",
+    "JsonSchemaSemanticValidator",
+    "KSDriftEngine",
     # Adapters
     "ServiceContainer",
     "congine_guard",
