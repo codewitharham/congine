@@ -153,3 +153,32 @@ def test_serialize_shapes_event() -> None:
     assert record["status"] == "fail"
     assert isinstance(record["created_at"], str)  # ISO-formatted
     assert record["breach_details"][0]["rule"] == "RANGE_CHECK"
+
+
+# --- D-10: dropped_total counter (telemetry loss visibility) -------------- #
+
+
+def test_dropped_total_increments_on_queue_full() -> None:
+    bus = QueueEventBus(max_queue_size=1, start_worker=False)
+    assert bus.dropped_total() == 0
+    bus.publish(_event("a"))
+    bus.publish(_event("b"))  # dropped — queue full
+    bus.publish(_event("c"))  # dropped — queue full
+    assert bus.dropped_total() == 2
+
+
+def test_dropped_total_increments_after_ship_retries_fail() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    bus = QueueEventBus(
+        config=_config(),
+        client_factory=_client_factory(handler),
+        max_retries=2,
+        backoff_base=0.001,
+        backoff_max=0.001,
+        start_worker=False,
+    )
+    assert bus._ship([_event("a"), _event("b")]) is False
+    # Both batched events are counted as dropped.
+    assert bus.dropped_total() == 2

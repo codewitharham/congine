@@ -22,7 +22,9 @@ concurrency:
 
 env:
   NODE_VERSION: '20'
-  PYTHON_VERSION: '3.14'
+  # Default Python for non-matrix jobs (setup/install/build/e2e/etc.).
+  # Test/lint/typecheck jobs prove the >=3.10 floor via a matrix below.
+  PYTHON_VERSION: '3.13'
   NX_CLOUD_DISTRIBUTED_EXECUTION: true
   NX_CLOUD_DISTRIBUTED_EXECUTION_AGENT_COUNT: 3
 
@@ -150,11 +152,15 @@ jobs:
           echo "❌ Code formatting issues detected"
           echo "Run 'npx nx format:write' locally to fix"
 
-  # Job 4: Linting
+  # Job 4: Linting (Python version matrix — proves the >=3.10 floor)
   lint:
-    name: Lint
+    name: Lint (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     needs: install-dependencies
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -171,7 +177,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install UV
@@ -187,13 +193,17 @@ jobs:
 
       - name: Report linting issues
         if: failure()
-        run: echo "❌ Linting failed. Fix the issues above."
+        run: echo "❌ Linting failed on Python ${{ matrix.python-version }}. Fix the issues above."
 
-  # Job 5: Type Checking
+  # Job 5: Type Checking (Python version matrix)
   typecheck:
-    name: Type Check
+    name: Type Check (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     needs: install-dependencies
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -210,7 +220,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install UV
@@ -226,13 +236,17 @@ jobs:
 
       - name: Report type checking issues
         if: failure()
-        run: echo "❌ Type checking failed. Fix the issues above."
+        run: echo "❌ Type checking failed on Python ${{ matrix.python-version }}. Fix the issues above."
 
-  # Job 6: Unit Tests
+  # Job 6: Unit Tests (Python version matrix — proves the >=3.10 floor)
   test:
-    name: Test
+    name: Test (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     needs: install-dependencies
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -249,7 +263,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install UV
@@ -267,7 +281,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports
+          name: coverage-reports-py${{ matrix.python-version }}
           path: |
             coverage/
             .coverage
@@ -275,7 +289,7 @@ jobs:
 
       - name: Report test results
         if: failure()
-        run: echo "❌ Tests failed. Check the logs above for details."
+        run: echo "❌ Tests failed on Python ${{ matrix.python-version }}. Check the logs above for details."
 
   # Job 7: Build
   build:
@@ -409,7 +423,8 @@ jobs:
       - name: Download coverage reports
         uses: actions/download-artifact@v4
         with:
-          name: coverage-reports
+          pattern: coverage-reports-py*
+          merge-multiple: true
 
       - name: Display coverage summary
         run: |

@@ -6,12 +6,13 @@ module is the stable entry point for SDK consumers.
 """
 
 # Layer 1: Abstractions
-from congine_core.repositories import (
+from congine_core.ports import (
     IContractRepository,
     IEventBus,
     ILogger,
     ISchemaStorage,
     ISemanticValidator,
+    IValidationRunner,
 )
 
 # Layer 2: Domain
@@ -31,13 +32,15 @@ from congine_core.usecases import SyncContractsUseCase, ValidateContractUseCase
 # Layer 4: Infrastructure
 from congine_core.infrastructure import (
     BackgroundSyncWorker,
+    BoundedValidationExecutor,
+    CircuitBreaker,
+    FileContractRepository,
     HttpContractRepository,
     JsonSchemaSemanticValidator,
     KSDriftEngine,
     LFUCache,
     QueueEventBus,
     StructuredLogger,
-    ValidationTimer,
 )
 
 # Layer 5: Adapters
@@ -59,7 +62,21 @@ from congine_core.exceptions import (
     ValidationTimeoutException,
 )
 
-__version__ = "0.1.0"
+# Single-sourced from pyproject.toml via the installed distribution's metadata.
+# The fallback covers editable installs where the distribution metadata is
+# unavailable (e.g. running from a source checkout without `pip install -e .`).
+try:
+    from importlib.metadata import (
+        PackageNotFoundError as _PackageNotFoundError,
+    )
+    from importlib.metadata import version as _pkg_version
+
+    try:
+        __version__ = _pkg_version("congine-sdk")
+    except _PackageNotFoundError:
+        __version__ = "0.0.0+unknown"
+except ImportError:  # pragma: no cover - importlib.metadata is stdlib in 3.10+
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     # Abstractions
@@ -68,6 +85,7 @@ __all__ = [
     "IEventBus",
     "ILogger",
     "ISemanticValidator",
+    "IValidationRunner",
     # Domain
     "BreachDetail",
     "ValidationResult",
@@ -82,10 +100,12 @@ __all__ = [
     # Infrastructure
     "LFUCache",
     "HttpContractRepository",
+    "FileContractRepository",
     "QueueEventBus",
     "StructuredLogger",
-    "ValidationTimer",
     "BackgroundSyncWorker",
+    "BoundedValidationExecutor",
+    "CircuitBreaker",
     "JsonSchemaSemanticValidator",
     "KSDriftEngine",
     # Adapters

@@ -1,7 +1,7 @@
 """HTTP contract repository (Layer 4).
 
 :class:`HttpContractRepository` implements
-:class:`congine_core.repositories.contract_repository.IContractRepository`,
+:class:`congine_core.ports.contract_repository.IContractRepository`,
 fetching active contracts from the control plane over HTTP and persisting an
 atomic on-disk snapshot for stale-ok degraded operation.
 
@@ -37,7 +37,7 @@ except ImportError:  # pragma: no cover - portalocker is a declared core depende
 
 from congine_core.config import CongineConfig
 from congine_core.exceptions import CongineSyncError
-from congine_core.repositories.logger import ILogger
+from congine_core.ports.logger import ILogger
 
 #: Seconds to wait for the cross-process snapshot lock before giving up the write.
 _SNAPSHOT_LOCK_TIMEOUT = 10.0
@@ -75,6 +75,23 @@ class HttpContractRepository:
         self._snapshot_path = os.path.join(
             self._snapshot_dir, f"snapshot_{_scope_key(config)}.json"
         )
+        # Separate lock file for boot single-flight (audit D-7). Distinct from
+        # `<snapshot>.lock` (used by save_snapshot) so boot coordination and
+        # write serialization do not contend with each other.
+        self._boot_lock_path = os.path.join(
+            self._snapshot_dir, f"boot_{_scope_key(config)}.lock"
+        )
+
+    @property
+    def snapshot_lock_path(self) -> str:
+        """Path of the per-scope file used for boot single-flight coordination.
+
+        :class:`SyncContractsUseCase.sync_once_single_flight` locks this file
+        with ``portalocker LOCK_EX | LOCK_NB`` so that under N-worker boot only
+        the first worker fetches from the control plane; the rest fall through
+        to the on-disk snapshot the first worker just wrote.
+        """
+        return self._boot_lock_path
 
     async def fetch_active_contracts(self) -> List[Dict]:
         """Fetch active contracts from the control plane.
@@ -163,7 +180,9 @@ class HttpContractRepository:
             if not acquired:
                 # Another process holds the lock and we timed out: it is writing
                 # the very same fetched contracts, so dropping our write is safe.
-                self._warn("Snapshot lock busy; skipping write", path=self._snapshot_path)
+                self._warn(
+                    "Snapshot lock busy; skipping write", path=self._snapshot_path
+                )
                 return
             fd, temp_path = tempfile.mkstemp(dir=self._snapshot_dir, suffix=".json")
             try:
@@ -210,6 +229,7 @@ class HttpContractRepository:
         finally:
             with contextlib.suppress(Exception):
                 lock.release()
+
     @staticmethod
     def _owned_by_current_user(path: str) -> bool:
         """Return ``True`` unless (on POSIX) the file is owned by another user."""

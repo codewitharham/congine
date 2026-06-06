@@ -26,11 +26,14 @@ import asyncio
 import atexit
 import concurrent.futures
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Dict
 
 
 class BoundedValidationExecutor:
-    """Bounded, load-shedding executor for time-boxed validation work."""
+    """Bounded, load-shedding executor for time-boxed validation work.
+
+    Conforms to :class:`congine_core.ports.validation_runner.IValidationRunner`.
+    """
 
     def __init__(
         self,
@@ -53,13 +56,18 @@ class BoundedValidationExecutor:
             thread_name_prefix="congine_validation",
             initializer=self._init_worker,
         )
-        self.capacity = max_workers + max_pending
-        self._sem = threading.BoundedSemaphore(self.capacity)
+        self._capacity = max_workers + max_pending
+        self._sem = threading.BoundedSemaphore(self._capacity)
         self._lock = threading.Lock()
         self._in_flight = 0
         self._rejected_total = 0
         if register_atexit:
             atexit.register(self.shutdown)
+
+    @property
+    def capacity(self) -> int:
+        """Total outstanding-work ceiling (workers + pending slots)."""
+        return self._capacity
 
     # ------------------------------------------------------------------ #
     # Worker-thread tagging (for re-entrancy detection)
@@ -185,6 +193,15 @@ class BoundedValidationExecutor:
         """Cumulative count of load-shed (rejected) validations."""
         with self._lock:
             return self._rejected_total
+
+    def health(self) -> Dict[str, Any]:
+        """Snapshot of runner state — conforms to :class:`IValidationRunner.health`."""
+        with self._lock:
+            return {
+                "in_flight": self._in_flight,
+                "rejected_total": self._rejected_total,
+                "capacity": self._capacity,
+            }
 
     def shutdown(self, wait: bool = False) -> None:
         """Shut the underlying pool down (idempotent)."""

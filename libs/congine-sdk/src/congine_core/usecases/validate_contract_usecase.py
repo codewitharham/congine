@@ -2,15 +2,14 @@
 
 :class:`ValidateContractUseCase` orchestrates the validation hot path: fetch the
 schema from storage, validate under a timeout, then publish a telemetry event.
-It depends only on Layer 1 abstractions (injected via the constructor); the
-sole concrete collaborator is the cross-platform :class:`ValidationTimer`
-utility, typed under ``TYPE_CHECKING`` to keep this layer decoupled from Layer 4.
+It depends only on Layer 1 abstractions (injected via the constructor) — the
+validation runner is typed against the :class:`IValidationRunner` port so this
+layer has no L4 concrete reference (audit D-4).
 """
 
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
 
 from congine_core.config import FailMode
 from congine_core.domain.models import TelemetryEvent, ValidationResult
@@ -19,12 +18,10 @@ from congine_core.exceptions import (
     CongineContractNotFoundError,
     CongineValidationError,
 )
-from congine_core.repositories.event_bus import IEventBus
-from congine_core.repositories.logger import ILogger
-from congine_core.repositories.schema_storage import ISchemaStorage
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.infrastructure.timer import ValidationTimer
+from congine_core.ports.event_bus import IEventBus
+from congine_core.ports.logger import ILogger
+from congine_core.ports.schema_storage import ISchemaStorage
+from congine_core.ports.validation_runner import IValidationRunner
 
 
 class ValidateContractUseCase:
@@ -36,7 +33,7 @@ class ValidateContractUseCase:
         validator: IValidator,
         event_bus: IEventBus,
         logger: ILogger,
-        timer: "ValidationTimer",
+        timer: IValidationRunner,
         timeout_ms: int = 15,
         fail_mode: FailMode = FailMode.DEGRADE,
     ) -> None:
@@ -47,7 +44,7 @@ class ValidateContractUseCase:
             validator: Validation strategy abstraction.
             event_bus: Telemetry event publisher abstraction.
             logger: Structured logger abstraction.
-            timer: Cross-platform timeout runner.
+            timer: Bounded validation runner (:class:`IValidationRunner`).
             timeout_ms: Per-validation wall-clock budget in milliseconds.
             fail_mode: Behaviour on a failing validation —
                 :attr:`FailMode.STRICT` raises,
@@ -115,26 +112,21 @@ class ValidateContractUseCase:
 
         Runs the *identical* workflow — schema resolution, telemetry, fail-mode
         enforcement — but offloads the synchronous validation onto the bounded,
-        load-shedding pool via ``run_with_timeout_async``. Async callers thus get
-        the **same** capacity bound and timeout as sync callers (audit H1/H2),
-        instead of the raw, unbounded ``run_in_executor`` that bypassed both.
-
-        Requires the injected ``timer`` to expose ``run_with_timeout_async``
-        (the :class:`BoundedValidationExecutor` does); falls back to the sync
-        timeout path if it does not.
+        load-shedding pool via :meth:`IValidationRunner.run_with_timeout_async`.
+        Async callers thus get the **same** capacity bound and timeout as sync
+        callers (audit H1/H2), instead of the raw, unbounded ``run_in_executor``
+        that bypassed both.
         """
         schema = self._resolve_schema(contract_id)
 
         def do_validate() -> ValidationResult:
             return self.validator.validate(payload, schema)
 
-        run_async = getattr(self.timer, "run_with_timeout_async", None)
         started = time.perf_counter()
         try:
-            if run_async is not None:
-                result = await run_async(do_validate, self.timeout_ms)
-            else:  # pragma: no cover - only when a non-bounded timer is injected
-                result = self.timer.run_with_timeout(do_validate, self.timeout_ms)
+            result = await self.timer.run_with_timeout_async(
+                do_validate, self.timeout_ms
+            )
         except TimeoutError:
             result = self._degraded_on_timeout(contract_id, started)
         except Exception as exc:  # noqa: BLE001 - degrade, but surface the cause

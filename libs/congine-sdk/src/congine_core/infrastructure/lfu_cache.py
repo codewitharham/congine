@@ -1,6 +1,6 @@
 """O(1) LFU cache with TTL (Layer 4).
 
-:class:`LFUCache` implements :class:`congine_core.repositories.schema_storage.ISchemaStorage`
+:class:`LFUCache` implements :class:`congine_core.ports.schema_storage.ISchemaStorage`
 using Ketan Shah's O(1) LFU algorithm: each operation (get/put/evict) runs in
 amortized constant time regardless of capacity. Entries also carry a TTL; an
 expired entry is treated as a miss and lazily reclaimed.

@@ -1,5 +1,14 @@
 """Cross-platform timeout runner (Layer 4).
 
+.. deprecated::
+    :class:`ValidationTimer` is retained for legacy reference only. Use
+    :class:`congine_core.infrastructure.bounded_executor.BoundedValidationExecutor`
+    — it is the production implementation, conforms to the
+    :class:`congine_core.ports.validation_runner.IValidationRunner` port, and
+    enforces the bounded/load-shedding and async-symmetric guarantees that
+    ``ValidationTimer`` lacks. Wiring ``ValidationTimer`` directly produces an
+    *unbounded, non-load-shedding* timer (audit D-3/D-11).
+
 :class:`ValidationTimer` runs a callable under a wall-clock deadline using a
 :class:`concurrent.futures.ThreadPoolExecutor`. This is Windows-safe (unlike
 ``signal.alarm``) at the cost of being unable to forcibly kill a runaway
@@ -10,11 +19,16 @@ from __future__ import annotations
 
 import atexit
 import concurrent.futures
+import warnings
 from typing import Any, Callable
 
 
 class ValidationTimer:
-    """Run callables with a millisecond timeout (cross-platform)."""
+    """Run callables with a millisecond timeout (cross-platform).
+
+    .. deprecated::
+        Use :class:`BoundedValidationExecutor` for new code.
+    """
 
     def __init__(self, max_workers: int = 10) -> None:
         """Initialize the executor pool.
@@ -22,6 +36,12 @@ class ValidationTimer:
         Args:
             max_workers: Maximum concurrent timed executions.
         """
+        warnings.warn(
+            "ValidationTimer is deprecated and provides no load-shedding or "
+            "async-symmetric guarantees; use BoundedValidationExecutor instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="congine_timer",

@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import FrozenSet, Optional
 
 from congine_core.exceptions import CongineConfigurationError
 
@@ -82,7 +82,11 @@ class CongineConfig:
     region: Region
 
     # --- Validation ------------------------------------------------------- #
-    validation_timeout_ms: int = 15
+    # 100ms accommodates CompositeValidator + jsonschema semantic validation on
+    # realistically-sized schemas without producing false-positive timeouts
+    # under STRICT mode (audit D-8). Pure rule-engine validation completes
+    # well under 1ms; the budget is a ceiling, not a target.
+    validation_timeout_ms: int = 100
     fail_mode: FailMode = FailMode.DEGRADE
 
     # --- Cache ------------------------------------------------------------ #
@@ -102,10 +106,34 @@ class CongineConfig:
     validation_max_workers: int = 10
     validation_max_pending: int = 10
 
+    # --- Contract source (local-first / GitOps) -------------------------- #
+    # ``http`` (default) uses HttpContractRepository against the control plane;
+    # ``file`` uses FileContractRepository, reading contracts from contracts_dir.
+    contract_source: str = "http"
+    contracts_dir: Optional[str] = None
+
     # --- Snapshot / security / observability ----------------------------- #
     snapshot_dir: Optional[str] = None
-    require_https: bool = False
+    # Secure default (audit D-6): the SDK ships credentials and telemetry. A
+    # non-local control plane MUST use HTTPS unless the deployer explicitly
+    # opts out via :attr:`allow_cleartext`. Loopback URLs are auto-exempt.
+    require_https: bool = True
+    # Explicit cleartext opt-out for dev / internal use. When ``True`` the
+    # HTTPS requirement is waived for non-local URLs and a loud warning is
+    # emitted at container init so the choice is observable.
+    allow_cleartext: bool = False
     log_level: str = "INFO"
+    # Optional structured-extra allowlist for the logger (PII safety, §5.3):
+    # when set, every kwarg key NOT in this set is replaced with "<redacted>"
+    # in emitted records. ``None`` (default) disables redaction.
+    log_safe_fields: Optional[FrozenSet[str]] = None
+
+    # --- Circuit breaker (control-plane boundary protection) ------------- #
+    # Trips OPEN after this many consecutive control-plane failures so a hung
+    # or flapping plane cannot stall bootstrap or burn background-sync budget.
+    breaker_failure_threshold: int = 5
+    # Seconds the breaker stays OPEN before allowing one HALF_OPEN probe.
+    breaker_cooldown_seconds: float = 30.0
 
     @classmethod
     def from_env(cls) -> "CongineConfig":
@@ -142,7 +170,7 @@ class CongineConfig:
             project_id=os.getenv("CONGINE_PROJECT_ID"),
             tenant_id=os.getenv("CONGINE_TENANT_ID"),
             region=region,
-            validation_timeout_ms=cls._env_int("CONGINE_TIMEOUT_MS", 15),
+            validation_timeout_ms=cls._env_int("CONGINE_TIMEOUT_MS", 100),
             fail_mode=fail_mode,
             cache_capacity=cls._env_int("CONGINE_CACHE_CAPACITY", 500),
             cache_ttl_seconds=cls._env_int("CONGINE_CACHE_TTL", 300),
@@ -155,9 +183,19 @@ class CongineConfig:
             drift_sample_limit=cls._env_int("CONGINE_DRIFT_SAMPLE_LIMIT", 500),
             validation_max_workers=cls._env_int("CONGINE_VALIDATION_WORKERS", 10),
             validation_max_pending=cls._env_int("CONGINE_VALIDATION_PENDING", 10),
+            contract_source=os.getenv("CONGINE_CONTRACT_SOURCE", "http").lower(),
+            contracts_dir=os.getenv("CONGINE_CONTRACTS_DIR"),
             snapshot_dir=os.getenv("CONGINE_SNAPSHOT_DIR"),
-            require_https=cls._env_bool("CONGINE_REQUIRE_HTTPS", False),
+            require_https=cls._env_bool("CONGINE_REQUIRE_HTTPS", True),
+            allow_cleartext=cls._env_bool("CONGINE_ALLOW_CLEARTEXT", False),
             log_level=os.getenv("CONGINE_LOG_LEVEL", "INFO").upper(),
+            log_safe_fields=cls._env_frozenset("CONGINE_LOG_SAFE_FIELDS"),
+            breaker_failure_threshold=cls._env_int(
+                "CONGINE_BREAKER_FAILURE_THRESHOLD", 5
+            ),
+            breaker_cooldown_seconds=cls._env_float(
+                "CONGINE_BREAKER_COOLDOWN_SECONDS", 30.0
+            ),
         )
         config.validate()
         return config
@@ -184,10 +222,15 @@ class CongineConfig:
             raise CongineConfigurationError(
                 f"Incomplete configuration for non-local base_url: missing {missing}"
             )
-        if self.require_https and not self.base_url.lower().startswith("https://"):
+        if (
+            self.require_https
+            and not self.allow_cleartext
+            and not self.base_url.lower().startswith("https://")
+        ):
             raise CongineConfigurationError(
                 "base_url must use https for a non-local control plane "
-                "(set CONGINE_REQUIRE_HTTPS=false to override)"
+                "(set CONGINE_ALLOW_CLEARTEXT=true for development / internal "
+                "deployments, or CONGINE_REQUIRE_HTTPS=false to disable the policy)"
             )
 
     def is_local_base_url(self) -> bool:
@@ -229,6 +272,15 @@ class CongineConfig:
             raise CongineConfigurationError(
                 f"Invalid integer for {name}: {raw!r}"
             ) from exc
+
+    @staticmethod
+    def _env_frozenset(name: str) -> "Optional[FrozenSet[str]]":
+        """Parse a comma-separated string env var into a frozenset, or ``None`` if unset."""
+        raw = os.getenv(name)
+        if raw is None:
+            return None
+        items = frozenset(part.strip() for part in raw.split(",") if part.strip())
+        return items
 
     @staticmethod
     def _env_float(name: str, default: float) -> float:
