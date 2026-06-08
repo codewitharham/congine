@@ -26,7 +26,7 @@ from typing import (
 from congine_core.domain.models import BreachDetail, ValidationResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.repositories.semantic_validator import ISemanticValidator
+    from congine_core.ports.semantic_validator import ISemanticValidator
 
 # --- ReDoS guard (audit H3) ------------------------------------------------- #
 #: Reject schema-supplied patterns longer than this (untrusted-input budget).

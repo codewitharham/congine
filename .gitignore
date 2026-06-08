@@ -47,3 +47,14 @@ Thumbs.db
 .claude/settings.local.json
 .nx/polygraph
 .nx/self-healing
+
+# Python build / test artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+.venv/
+.python-version

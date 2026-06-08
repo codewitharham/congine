@@ -1,7 +1,7 @@
 """Queue-based event bus (Layer 4).
 
 :class:`QueueEventBus` implements
-:class:`congine_core.repositories.event_bus.IEventBus`. Publishing is
+:class:`congine_core.ports.event_bus.IEventBus`. Publishing is
 fire-and-forget: events are enqueued without blocking and drained by a daemon
 worker thread that ships them to the control-plane telemetry endpoint. Under
 back-pressure (full queue) events are dropped silently (graceful degradation),
@@ -24,10 +24,11 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 import httpx
 
 from congine_core.config import CongineConfig
-from congine_core.repositories.logger import ILogger
+from congine_core.ports.logger import ILogger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import TelemetryEvent
+    from congine_core.infrastructure.circuit_breaker import CircuitBreaker
 
 #: Default control-plane path for telemetry ingestion.
 _TELEMETRY_PATH = "/api/v1/telemetry"
@@ -47,6 +48,7 @@ class QueueEventBus:
         backoff_max: float = 8.0,
         client_factory: Optional[Callable[[], httpx.Client]] = None,
         start_worker: bool = True,
+        circuit_breaker: "Optional[CircuitBreaker]" = None,
     ) -> None:
         """Args:
         config: Runtime configuration providing the telemetry ``base_url`` and
@@ -74,6 +76,13 @@ class QueueEventBus:
         self._client: Optional[httpx.Client] = None
         self._stop_event = threading.Event()
         self._daemon: Optional[threading.Thread] = None
+        self._circuit_breaker = circuit_breaker
+        # Cumulative count of telemetry events lost (audit D-10): queue-full on
+        # publish + batch-drop after retries. Exposed via :meth:`dropped_total`
+        # and surfaced in :meth:`ServiceContainer.health` so operators have a
+        # visible loss signal under sustained back-pressure.
+        self._dropped_total = 0
+        self._dropped_lock = threading.Lock()
 
         if start_worker:
             self._daemon = threading.Thread(
@@ -88,7 +97,7 @@ class QueueEventBus:
     # Public API (IEventBus)
     # ------------------------------------------------------------------ #
     def publish(self, event: "TelemetryEvent") -> None:
-        """Enqueue *event* without blocking; drop silently if the queue is full.
+        """Enqueue *event* without blocking; drop and count if the queue is full.
 
         Args:
             event: The telemetry event to publish.
@@ -96,15 +105,24 @@ class QueueEventBus:
         try:
             self._queue.put_nowait(event)
         except queue.Full:
+            with self._dropped_lock:
+                self._dropped_total += 1
+                dropped = self._dropped_total
             if self._logger:
                 self._logger.warning(
                     "Event queue full, dropping event",
                     contract_id=getattr(event, "contract_id", None),
+                    dropped_total=dropped,
                 )
 
     def queue_depth(self) -> int:
         """Approximate number of telemetry events currently buffered."""
         return self._queue.qsize()
+
+    def dropped_total(self) -> int:
+        """Cumulative count of telemetry events lost (queue-full + ship-failure)."""
+        with self._dropped_lock:
+            return self._dropped_total
 
     def stop(self, drain: bool = True) -> None:
         """Stop the drain worker, optionally flushing remaining events.
@@ -198,6 +216,20 @@ class QueueEventBus:
                 self._logger.debug("Telemetry drained", count=len(batch))
             return True
 
+        # Skip the network entirely if the breaker is OPEN — a persistently
+        # dead plane should not eat 7.5s of backoff per batch on the bus thread.
+        if self._circuit_breaker is not None and not self._circuit_breaker.allow():
+            with self._dropped_lock:
+                self._dropped_total += len(batch)
+                dropped = self._dropped_total
+            if self._logger:
+                self._logger.warning(
+                    "Circuit breaker OPEN; dropping telemetry batch",
+                    count=len(batch),
+                    dropped_total=dropped,
+                )
+            return False
+
         attempts = max_attempts if max_attempts is not None else self._max_retries
         url = f"{self._config.base_url}{_TELEMETRY_PATH}"
         headers = {
@@ -218,6 +250,8 @@ class QueueEventBus:
                         count=len(batch),
                         attempt=attempt,
                     )
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker.record_success()
                 return True
             except httpx.HTTPError as exc:
                 if self._logger:
@@ -228,10 +262,16 @@ class QueueEventBus:
                         error=str(exc),
                     )
                 if attempt >= attempts:
+                    if self._circuit_breaker is not None:
+                        self._circuit_breaker.record_failure()
+                    with self._dropped_lock:
+                        self._dropped_total += len(batch)
+                        dropped = self._dropped_total
                     if self._logger:
                         self._logger.error(
                             "Telemetry chunk dropped after retries",
                             count=len(batch),
+                            dropped_total=dropped,
                         )
                     return False
                 # Interruptible backoff so stop() wakes us promptly.

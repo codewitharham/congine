@@ -1,7 +1,7 @@
 """JSON Schema semantic validator (Layer 4).
 
 :class:`JsonSchemaSemanticValidator` implements
-:class:`congine_core.repositories.semantic_validator.ISemanticValidator` using
+:class:`congine_core.ports.semantic_validator.ISemanticValidator` using
 the ``jsonschema`` library. It drains the validator's *lazy* error stream
 (:meth:`jsonschema.protocols.Validator.iter_errors`) so that every field-level
 violation in a payload is reported in a single pass, each mapped to a

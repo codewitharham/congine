@@ -14,9 +14,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
 
 from congine_core.config import CongineConfig
 from congine_core.domain.models import TelemetryEvent
+from congine_core.exceptions import CongineConfigurationError
 from congine_core.domain.validator import CompositeValidator, LocalValidator
 from congine_core.infrastructure.background_sync import BackgroundSyncWorker
 from congine_core.infrastructure.bounded_executor import BoundedValidationExecutor
+from congine_core.infrastructure.circuit_breaker import CircuitBreaker
+from congine_core.infrastructure.file_contract_repository import FileContractRepository
 from congine_core.infrastructure.http_contract_repository import HttpContractRepository
 from congine_core.infrastructure.jsonschema_validator import (
     JsonSchemaSemanticValidator,
@@ -81,14 +84,22 @@ class ServiceContainer:
         self.config = config
 
         # --- Layer 4: Infrastructure (concrete implementations) --------- #
-        self.logger = StructuredLogger("congine", level=config.log_level)
-        # Security posture warning (H4): cleartext control plane leaks the API
-        # key + telemetry. Hard enforcement is opt-in via require_https.
+        self.logger = StructuredLogger(
+            "congine",
+            level=config.log_level,
+            log_safe_fields=config.log_safe_fields,
+        )
+        # Security posture warning (audit D-6): cleartext control plane leaks
+        # the API key + telemetry. Default policy now *enforces* HTTPS at
+        # config-validate time, so this branch fires only when the deployer
+        # explicitly opted out (allow_cleartext=True) — a loud audit trail of
+        # the conscious choice.
         if not config.is_local_base_url() and not config.base_url.lower().startswith(
             "https://"
         ):
             self.logger.warning(
-                "base_url is not HTTPS; API key and telemetry are sent in cleartext",
+                "Cleartext control plane in use (allow_cleartext=True); "
+                "API key and telemetry are sent in cleartext",
                 base_url=config.base_url,
             )
         # Bounded, load-shedding pool (H1) — also the off-loop executor for the
@@ -101,8 +112,28 @@ class ServiceContainer:
             capacity=config.cache_capacity,
             ttl_seconds=config.cache_ttl_seconds,
         )
-        self.contract_repository = HttpContractRepository(config, self.logger)
-        self.event_bus = QueueEventBus(config=config, logger=self.logger)
+        # Control-plane circuit breaker (H4) — wrapped around both the contract
+        # fetch (sync use case) and telemetry ship (event bus). Process-local
+        # in-memory state; a distributed breaker is Phase 2+.
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=config.breaker_failure_threshold,
+            cooldown_seconds=config.breaker_cooldown_seconds,
+        )
+        # Contract source: ``file`` enables the local-first / GitOps path
+        # (reads JSON/YAML from ``contracts_dir``). Anything else (the default
+        # ``http``) wires the network-backed repository.
+        if config.contract_source == "file" and config.contracts_dir is not None:
+            self.contract_repository = FileContractRepository(
+                contracts_dir=config.contracts_dir,
+                logger=self.logger,
+            )
+        else:
+            self.contract_repository = HttpContractRepository(config, self.logger)
+        self.event_bus = QueueEventBus(
+            config=config,
+            logger=self.logger,
+            circuit_breaker=self.circuit_breaker,
+        )
         self.semantic_validator = JsonSchemaSemanticValidator()
         self.drift_engine = KSDriftEngine(
             threshold=config.drift_threshold,
@@ -131,11 +162,17 @@ class ServiceContainer:
             timeout_ms=config.validation_timeout_ms,
             fail_mode=config.fail_mode,
         )
+        # `snapshot_lock_path` is exposed by HttpContractRepository for boot
+        # single-flight (D-7); other repositories (e.g. FileContractRepository)
+        # do not need coordination, so the use case degrades gracefully.
+        boot_lock_path = getattr(self.contract_repository, "snapshot_lock_path", None)
         self.sync_contracts_usecase = SyncContractsUseCase(
             schema_storage=self.schema_storage,
             contract_repository=self.contract_repository,
             logger=self.logger,
             cache_ttl_seconds=config.cache_ttl_seconds,
+            circuit_breaker=self.circuit_breaker,
+            boot_lock_path=boot_lock_path,
         )
 
         # --- Background sync worker (started on demand) ----------------- #
@@ -182,7 +219,7 @@ class ServiceContainer:
             raise RuntimeError(
                 "bootstrap() cannot run inside an event loop; await bootstrap_async()"
             )
-        loaded = self.sync_contracts_usecase.sync_once()
+        loaded = self.sync_contracts_usecase.sync_once_single_flight()
         if self.config.sync_enabled:
             self.start_background_sync()
         return loaded
@@ -193,7 +230,7 @@ class ServiceContainer:
         Returns:
             The number of contracts loaded into the cache by the initial sync.
         """
-        loaded = await self.sync_contracts_usecase.sync_once_async()
+        loaded = await self.sync_contracts_usecase.sync_once_single_flight_async()
         if self.config.sync_enabled:
             self.start_background_sync()
         return loaded
@@ -218,8 +255,19 @@ class ServiceContainer:
         Returns:
             The :class:`DriftResult`. Requires the optional ``numpy`` extension
             (``congine-sdk[stats]``); see :meth:`KSDriftEngine.detect`.
+
+        Raises:
+            CongineConfigurationError: If the ``[stats]`` extra is not
+                installed (audit D-10) — converted from the underlying
+                :class:`ImportError` so callers see a single exception family.
         """
-        result = self.drift_engine.detect(current_samples)
+        try:
+            result = self.drift_engine.detect(current_samples)
+        except ImportError as exc:
+            raise CongineConfigurationError(
+                "Drift detection requires the [stats] extra. "
+                "Install with: pip install 'congine-sdk[stats]'"
+            ) from exc
         if result.drift_detected:
             self.logger.warning(
                 "Distribution drift detected",
@@ -246,13 +294,20 @@ class ServiceContainer:
 
     def health(self) -> Dict[str, Any]:
         """Return a lightweight operational snapshot (L2 — observability)."""
+        # `dropped_total` is exposed only when the event bus implements it
+        # (the default :class:`QueueEventBus` does; test fakes may not).
+        dropped_total = getattr(self.event_bus, "dropped_total", None)
         return {
             "cache_entries": self.schema_storage.size(),
             "validation_in_flight": self.validation_executor.in_flight,
             "validation_rejected_total": self.validation_executor.rejected_total,
             "telemetry_queue_depth": self.event_bus.queue_depth(),
+            "telemetry_dropped_total": dropped_total()
+            if callable(dropped_total)
+            else 0,
             "sync_running": self.sync_worker.is_running(),
             "drift_reference_samples": self.drift_engine.sample_count,
+            "breaker_state": self.circuit_breaker.state,
         }
 
     def close(self) -> None:

@@ -16,7 +16,7 @@ import atexit
 import threading
 from typing import TYPE_CHECKING, Optional
 
-from congine_core.repositories.logger import ILogger
+from congine_core.ports.logger import ILogger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.usecases.sync_contracts_usecase import (

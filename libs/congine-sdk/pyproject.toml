@@ -1,12 +1,41 @@
 [project]
 name = "congine-sdk"
 version = "0.1.0"
+description = "Core validation engine for AMCE — contract-driven governance for LLM outputs"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Congine" },
+]
+keywords = ["llm", "validation", "contracts", "governance", "ai", "guardrails"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
     "httpx>=0.28",
     "jsonschema>=4.23",
     "portalocker>=2.8",
 ]
+
+[project.urls]
+Homepage = "https://github.com/congine/congine"
+Repository = "https://github.com/congine/congine"
+Documentation = "https://github.com/congine/congine/tree/main/libs/congine-sdk#readme"
+Changelog = "https://github.com/congine/congine/blob/main/libs/congine-sdk/CHANGELOG.md"
+Issues = "https://github.com/congine/congine/issues"
 
 [project.optional-dependencies]
 # Optional LangChain integration. Core SDK stays langchain-free; install with
@@ -15,6 +44,11 @@ langchain = ["langchain-core>=0.3,<0.4"]
 # Optional math extension for the KS drift engine. Core SDK does not require
 # numpy; install with `pip install congine-sdk[stats]` to use KSDriftEngine.detect.
 stats = ["numpy>=1.26"]
+# Optional linear-time regex backend for ReDoS hardening (audit H3). The core
+# SDK ships fail-closed length caps as the always-on defence; install with
+# `pip install congine-sdk[redos]` to switch the rule engine onto re2 (RE2
+# guarantees no catastrophic backtracking).
+redos = ["google-re2>=1.0"]
 # Development / test toolchain. NOT shipped to runtime consumers; install with
 # `pip install congine-sdk[dev]` (or `uv sync --extra dev`).
 dev = [
@@ -26,6 +60,13 @@ dev = [
 
 [tool.uv]
 package = true
+
+[tool.ruff]
+# Pin the target version to the supported floor so format/check do not rewrite
+# Python 3.14-only syntax (e.g. PEP 758 unparenthesised `except A, B:`) that
+# would break collection on 3.10–3.13 — the declared `requires-python` floor.
+target-version = "py310"
+extend-exclude = ["src/congine_sdk.egg-info"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

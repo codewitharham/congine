@@ -18,7 +18,7 @@ def test_defaults_applied() -> None:
         tenant_id=None,
         region=Region.US,
     )
-    assert cfg.validation_timeout_ms == 15
+    assert cfg.validation_timeout_ms == 100
     assert cfg.fail_mode is FailMode.DEGRADE
     assert cfg.cache_capacity == 500
     assert cfg.cache_ttl_seconds == 300
@@ -52,6 +52,9 @@ def test_from_env_reads_all(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONGINE_FAIL_MODE", "strict")
     monkeypatch.setenv("CONGINE_CACHE_CAPACITY", "99")
     monkeypatch.setenv("CONGINE_CACHE_TTL", "120")
+    # The secure HTTPS default would reject a non-local http:// URL; opt out so
+    # the legacy "read every env var" assertion still exercises a cleartext URL.
+    monkeypatch.setenv("CONGINE_ALLOW_CLEARTEXT", "true")
 
     cfg = CongineConfig.from_env()
 
@@ -64,6 +67,7 @@ def test_from_env_reads_all(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.fail_mode is FailMode.STRICT
     assert cfg.cache_capacity == 99
     assert cfg.cache_ttl_seconds == 120
+    assert cfg.allow_cleartext is True
 
 
 def test_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
