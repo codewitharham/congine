@@ -202,4 +202,4 @@ Each worker process builds its own `ServiceContainer` → own in-memory `LFUCach
 
 This was a fresh re-read; findings are evidence-cited and reproducible. Full disclosure: items D-2 (nx dev-extra) and the surviving D-1 (tests/ comma-except) are **regressions/omissions from the prior Sprint-1 dependency move and `src`-only grep** — surfaced here precisely because this pass treated the tree as unknown and grepped `src/` **and** `tests/`. The validation core is strong; the blockers are portability, packaging, licensing, and the missing network breaker — none requiring a rewrite.
 
-_Reproduce: `grep -rn "except [A-Za-z][A-Za-z0-9_.]_, " src/ tests/`→ 1 hit (test_remediations.py:189);`grep -n extra project.json`→ no`dev`; `grep -rin breaker src/`→ none;`grep -rn "ValidationTimer(" src/`→ none;`ls | grep -i license`→ none;`python -m pytest` → 201 passed on 3.14.\*
+_Reproduce: `grep -rn "except [A-Za-z]A-Za-z0-9_.]\_, " src/ tests/`→ 1 hit (test_remediations.py:189);`grep -n extra project.json`→ no`dev`; `grep -rin breaker src/`→ none;`grep -rn "ValidationTimer(" src/`→ none;`ls | grep -i license`→ none;`python -m pytest` → 201 passed on 3.14.\*
