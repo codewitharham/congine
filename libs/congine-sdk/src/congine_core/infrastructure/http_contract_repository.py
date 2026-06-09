@@ -23,7 +23,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, cast
 
 import httpx
 
@@ -93,7 +93,7 @@ class HttpContractRepository:
         """
         return self._boot_lock_path
 
-    async def fetch_active_contracts(self) -> List[Dict]:
+    async def fetch_active_contracts(self) -> list[dict[str, Any]]:
         """Fetch active contracts from the control plane.
 
         Tenant/project/api-key headers are attached to every request so the
@@ -125,7 +125,10 @@ class HttpContractRepository:
                         f"({max_bytes})"
                     )
                 data = response.json()
-            return data["contracts"]
+            contracts = data["contracts"]
+            if not isinstance(contracts, list):
+                raise CongineSyncError("contracts must be a list")
+            return cast(list[dict[str, Any]], contracts)
         except (httpx.HTTPError, KeyError, ValueError, CongineSyncError) as exc:
             if self.logger is not None:
                 self.logger.error(
@@ -137,7 +140,7 @@ class HttpContractRepository:
                 f"Failed to fetch active contracts from {url}"
             ) from exc
 
-    def load_snapshot(self) -> Optional[List[Dict]]:
+    def load_snapshot(self) -> Optional[list[dict[str, Any]]]:
         """Load contracts from the per-tenant disk snapshot (stale-ok fallback).
 
         Returns ``None`` when no usable snapshot exists. The file is refused if
@@ -158,7 +161,7 @@ class HttpContractRepository:
             return None
         return self._validate_envelope(snapshot)
 
-    def save_snapshot(self, contracts: List[Dict]) -> None:
+    def save_snapshot(self, contracts: list[dict[str, Any]]) -> None:
         """Persist *contracts* to the scoped snapshot path atomically.
 
         Multi-worker safety (audit C2): under Gunicorn/Uvicorn many worker
@@ -246,20 +249,22 @@ class HttpContractRepository:
         if os.name != "posix":
             return True
         try:
-            return os.stat(path).st_uid == os.getuid()
+            getuid = getattr(os, "getuid", None)
+            if getuid is None:
+                return True
+            return bool(os.stat(path).st_uid == getuid())
         except OSError:
             return True
 
     @staticmethod
-    def _validate_envelope(snapshot: Any) -> Optional[List[Dict]]:
+    def _validate_envelope(snapshot: Any) -> Optional[list[dict[str, Any]]]:
         """Validate the snapshot envelope; return its well-formed contracts."""
         if not isinstance(snapshot, dict):
             return None
         contracts = snapshot.get("contracts")
         if not isinstance(contracts, list):
             return None
-        valid = [c for c in contracts if isinstance(c, dict)]
-        return valid or None
+        return cast(list[dict[str, Any]], [c for c in contracts if isinstance(c, dict)]) or None
 
     def _warn(self, message: str, **kwargs: Any) -> None:
         if self.logger is not None:

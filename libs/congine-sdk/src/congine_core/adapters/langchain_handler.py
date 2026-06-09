@@ -20,7 +20,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import ValidationResult
 
 
-class CongineCallbackHandler(_BaseCallbackHandler):  # type: ignore[misc,valid-type]
+class CongineCallbackHandler(_BaseCallbackHandler):
     """Validate streamed LLM completions against a Congine contract."""
 
     def __init__(

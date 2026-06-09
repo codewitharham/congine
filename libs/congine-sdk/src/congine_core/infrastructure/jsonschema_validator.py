@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any, List
 
-import jsonschema
+import jsonschema  # type: ignore[import-untyped]
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
+from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 
 from congine_core.domain.models import BreachDetail
 from congine_core.pii_sanitize import sanitize_breach_message
@@ -26,7 +26,7 @@ class JsonSchemaSemanticValidator:
 
     def __init__(
         self,
-        validator_cls: type = Draft202012Validator,
+        validator_cls: type[Any] = Draft202012Validator,
         max_breaches: int = DEFAULT_SEMANTIC_MAX_BREACHES,
         format_checking: bool = False,
     ) -> None:
@@ -39,7 +39,7 @@ class JsonSchemaSemanticValidator:
         self._max_breaches = max_breaches
         self._format_checking = format_checking
 
-    def validate(self, payload: dict, schema: dict) -> List[BreachDetail]:
+    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> List[BreachDetail]:
         """Return a :class:`BreachDetail` for every JSON Schema violation."""
         pattern_breaches = self._check_schema_patterns(schema)
         if pattern_breaches:
@@ -86,7 +86,7 @@ class JsonSchemaSemanticValidator:
             )
         return breaches
 
-    def _check_schema_patterns(self, schema: dict) -> List[BreachDetail]:
+    def _check_schema_patterns(self, schema: dict[str, Any]) -> List[BreachDetail]:
         """Reject schemas whose property patterns exceed the safe length budget."""
         properties = schema.get("properties", {})
         if not isinstance(properties, dict):

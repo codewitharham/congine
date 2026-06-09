@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
 from congine_core.config import CongineConfig, DeploymentMode
 from congine_core.domain.models import TelemetryEvent
 from congine_core.exceptions import CongineConfigurationError
-from congine_core.domain.validator import CompositeValidator, LocalValidator
+from congine_core.domain.validator import CompositeValidator, LocalValidator, IValidator
 from congine_core.infrastructure.background_sync import BackgroundSyncWorker
 from congine_core.infrastructure.bounded_executor import BoundedValidationExecutor
 from congine_core.infrastructure.circuit_breaker import CircuitBreaker
@@ -24,6 +24,7 @@ from congine_core.infrastructure.logger import StructuredLogger
 from congine_core.infrastructure.queue_event_bus import QueueEventBus
 from congine_core.usecases.sync_contracts_usecase import SyncContractsUseCase
 from congine_core.usecases.validate_contract_usecase import ValidateContractUseCase
+from congine_core.ports.contract_repository import IContractRepository
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import DriftResult
@@ -136,6 +137,7 @@ class ServiceContainer:
             failure_threshold=config.breaker_failure_threshold,
             cooldown_seconds=config.breaker_cooldown_seconds,
         )
+        self.contract_repository: IContractRepository
         if config.contract_source == "file" and config.contracts_dir is not None:
             self.contract_repository = FileContractRepository(
                 contracts_dir=config.contracts_dir,
@@ -161,6 +163,7 @@ class ServiceContainer:
         )
 
         rule_validator = LocalValidator()
+        self.validator: IValidator
         if config.semantic_validation_enabled:
             self.validator = CompositeValidator(
                 rule_validator=rule_validator,

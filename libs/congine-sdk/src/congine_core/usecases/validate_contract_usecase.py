@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 from congine_core.config import FailMode
 from congine_core.domain.models import BreachDetail, TelemetryEvent, ValidationResult
@@ -47,7 +48,7 @@ class ValidateContractUseCase:
 
     def execute(
         self,
-        payload: dict,
+        payload: dict[str, Any],
         contract_id: str,
         contract_version: str,
     ) -> ValidationResult:
@@ -84,7 +85,7 @@ class ValidateContractUseCase:
 
     async def execute_async(
         self,
-        payload: dict,
+        payload: dict[str, Any],
         contract_id: str,
         contract_version: str,
     ) -> ValidationResult:
@@ -121,7 +122,7 @@ class ValidateContractUseCase:
 
         return self._finalize(result, contract_id, contract_version)
 
-    def _check_payload_size(self, payload: dict) -> ValidationResult | None:
+    def _check_payload_size(self, payload: dict[str, Any]) -> ValidationResult | None:
         try:
             size = len(json.dumps(payload, default=str))
         except (TypeError, ValueError):
@@ -139,7 +140,7 @@ class ValidateContractUseCase:
             )
         return None
 
-    def _check_schema_size(self, schema: dict) -> ValidationResult | None:
+    def _check_schema_size(self, schema: dict[str, Any]) -> ValidationResult | None:
         try:
             size = len(json.dumps(schema, default=str))
         except (TypeError, ValueError):
@@ -157,7 +158,7 @@ class ValidateContractUseCase:
             )
         return None
 
-    def _resolve_schema(self, contract_id: str) -> dict:
+    def _resolve_schema(self, contract_id: str) -> dict[str, Any]:
         schema = self.schema_storage.get(contract_id)
         if schema is None:
             self.logger.error("Schema not found", contract_id=contract_id)

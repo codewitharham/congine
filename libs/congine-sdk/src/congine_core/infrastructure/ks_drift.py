@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 from congine_core.domain.models import DriftResult
 
@@ -28,14 +28,14 @@ from congine_core.domain.models import DriftResult
 DEFAULT_MAX_SAMPLES = 500
 
 
-def _import_numpy():
+def _import_numpy() -> Any:
     """Import and return ``numpy`` (indirected so tests can simulate absence)."""
     import numpy as np
 
     return np
 
 
-def _require_numpy():
+def _require_numpy() -> Any:
     """Return ``numpy`` or raise a clear, actionable :class:`ImportError`."""
     try:
         return _import_numpy()

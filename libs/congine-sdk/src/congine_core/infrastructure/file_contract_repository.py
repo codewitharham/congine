@@ -22,7 +22,7 @@ from __future__ import annotations
 import glob
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Any, Optional
 
 from congine_core.ports.logger import ILogger
 
@@ -50,7 +50,7 @@ class FileContractRepository:
         self.max_contract_files = max_contract_files
         self.max_file_bytes = max_file_bytes
 
-    async def fetch_active_contracts(self) -> List[Dict]:
+    async def fetch_active_contracts(self) -> list[dict[str, Any]]:
         """Return every well-formed contract found under :attr:`contracts_dir`.
 
         The method is declared ``async`` to satisfy the
@@ -65,7 +65,7 @@ class FileContractRepository:
                 )
             return []
 
-        contracts: List[Dict] = []
+        contracts: list[dict[str, Any]] = []
         json_files = sorted(
             glob.glob(os.path.join(self.contracts_dir, "**", "*.json"), recursive=True)
         )[: self.max_contract_files]
@@ -84,9 +84,9 @@ class FileContractRepository:
 
         # YAML is optional: only enumerate yaml files if PyYAML is importable.
         try:
-            import yaml  # type: ignore[import-not-found]
+            import yaml  # type: ignore[import-untyped]
         except ImportError:
-            yaml = None  # type: ignore[assignment]
+            yaml = None
         if yaml is not None:
             yaml_files = sorted(
                 glob.glob(
@@ -101,7 +101,7 @@ class FileContractRepository:
             for path in yaml_files:
                 try:
                     payload = self._read_yaml_file(path, yaml)
-                except (OSError, yaml.YAMLError) as exc:  # type: ignore[attr-defined]
+                except (OSError, yaml.YAMLError) as exc:
                     if self.logger is not None:
                         self.logger.warning(
                             "Skipping malformed contract file",
@@ -119,11 +119,11 @@ class FileContractRepository:
             )
         return contracts
 
-    def load_snapshot(self) -> Optional[List[Dict]]:
+    def load_snapshot(self) -> Optional[list[dict[str, Any]]]:
         """File source is the snapshot — return ``None`` to force re-read."""
         return None
 
-    def save_snapshot(self, contracts: List[Dict]) -> None:
+    def save_snapshot(self, contracts: list[dict[str, Any]]) -> None:
         """No-op: the file source is itself canonical."""
         if self.logger is not None:
             self.logger.debug(
@@ -138,15 +138,15 @@ class FileContractRepository:
             raise OSError(f"Contract file exceeds max_file_bytes: {path}")
         return json.loads(raw.decode("utf-8"))
 
-    def _read_yaml_file(self, path: str, yaml: object) -> object:
+    def _read_yaml_file(self, path: str, yaml: Any) -> object:
         with open(path, "rb") as fh:
             raw = fh.read(self.max_file_bytes + 1)
         if len(raw) > self.max_file_bytes:
             raise OSError(f"Contract file exceeds max_file_bytes: {path}")
-        return yaml.safe_load(raw.decode("utf-8"))  # type: ignore[union-attr]
+        return yaml.safe_load(raw.decode("utf-8"))
 
     @staticmethod
-    def _extract(payload: object) -> List[Dict]:
+    def _extract(payload: object) -> list[dict[str, Any]]:
         """Normalise a parsed payload into a list of contract mappings.
 
         Accepts either a single contract object (``{"id": ..., "schema": ...}``)

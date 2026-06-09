@@ -284,7 +284,7 @@ class QueueEventBus:
     def _serialize(event: "TelemetryEvent") -> Dict[str, Any]:
         """Serialize a :class:`TelemetryEvent` to a JSON-ready mapping."""
         created_at = getattr(event, "created_at", None)
-        if hasattr(created_at, "isoformat"):
+        if created_at is not None and hasattr(created_at, "isoformat"):
             created_at = created_at.isoformat()
         return {
             "contract_id": getattr(event, "contract_id", None),
