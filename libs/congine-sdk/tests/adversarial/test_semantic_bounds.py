@@ -29,7 +29,9 @@ def test_oversized_schema_pattern_rejected() -> None:
     validator = JsonSchemaSemanticValidator()
     schema = {
         "type": "object",
-        "properties": {"x": {"type": "string", "pattern": "a" * (MAX_PATTERN_LENGTH + 1)}},
+        "properties": {
+            "x": {"type": "string", "pattern": "a" * (MAX_PATTERN_LENGTH + 1)}
+        },
     }
     breaches = validator.validate({"x": "a"}, schema)
     assert len(breaches) == 1

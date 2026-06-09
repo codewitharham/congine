@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from congine_core.adapters.dependency_injection import ServiceContainer
-from congine_core.config import CongineConfig, CongineConfigurationError, DeploymentMode, Region
+from congine_core.config import (
+    CongineConfig,
+    CongineConfigurationError,
+    Region,
+)
 
 
 def _base_config(**overrides) -> CongineConfig:
@@ -46,7 +50,9 @@ def test_for_tenant_isolates_cache() -> None:
             "proj-1",
             config=_base_config(tenant_id="tenant-b", project_id="proj-1"),
         )
-        c1.schema_storage.put("shared-id", {"properties": {"a": {"type": "string"}}}, 300)
+        c1.schema_storage.put(
+            "shared-id", {"properties": {"a": {"type": "string"}}}, 300
+        )
         assert c2.schema_storage.get("shared-id") is None
         assert c1 is not c2
     finally:

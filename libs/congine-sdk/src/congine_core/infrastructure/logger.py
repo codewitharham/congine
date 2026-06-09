@@ -79,8 +79,7 @@ class StructuredLogger:
                 if key_lower in _BLOCKED_LOG_KEYS:
                     redacted[k] = "<redacted>"
                 elif (
-                    self._log_safe_fields is not None
-                    and k not in self._log_safe_fields
+                    self._log_safe_fields is not None and k not in self._log_safe_fields
                 ):
                     redacted[k] = "<redacted>"
                 else:

@@ -70,12 +70,18 @@ treated as a breaking security change:
 
 - `require_https = True` — non-local URLs must be HTTPS unless
   `CONGINE_ALLOW_CLEARTEXT=true` is explicitly set.
-- `is_local_base_url()` auto-exempts `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`.
+- `is_local_base_url()` exempts exact loopback hosts only (`localhost`, `127.0.0.1`,
+  `::1`, `0.0.0.0`) via parsed hostname — substring false positives rejected.
 - Snapshot paths are scoped per `(base_url, project_id, tenant_id)` SHA-256
   hash; symlinks and non-owner-owned files are refused on load.
-- Pattern length is capped at 1000 chars; value length at 50 000 chars
-  (fail-closed ReDoS defence — install `congine-sdk[redos]` for `re2`'s
-  linear-time guarantees).
+- `google-re2` is a **required** core dependency; pattern length capped at 1000
+  chars; value length at 50 000 chars (defense-in-depth).
+- Semantic validation: `semantic_format_checking=false` by default;
+  `semantic_max_breaches=100` cap on `iter_errors`.
+- `deployment_mode=multi_tenant` forbids `ServiceContainer.get_default()` —
+  explicit per-tenant containers required.
+- Non-local deployments auto-enable log redaction; `api_key`, `payload`, and
+  `breach_details` keys are unconditionally blocklisted from logs.
 - `CircuitBreaker` defaults: 5 failures → OPEN, 30 s cooldown → HALF_OPEN.
 - API key and tenant headers are never logged: API key transit is HTTPS-only
   when defaults are kept; logs are gated through a per-record allowlist when

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from congine_core.config import FailMode, Region
+from congine_core.config import FailMode
 from congine_core.domain.validator import LocalValidator
 from congine_core.infrastructure.jsonschema_validator import JsonSchemaSemanticValidator
 from congine_core.pii_sanitize import sanitize_breach_message
@@ -51,4 +51,6 @@ def test_jsonschema_messages_sanitized() -> None:
     }
     breaches = validator.validate({"name": "short"}, schema)
     assert breaches
-    assert "short" not in (breaches[0].message or "")
+    msg = breaches[0].message or ""
+    assert "'short'" not in msg
+    assert "<redacted>" in msg

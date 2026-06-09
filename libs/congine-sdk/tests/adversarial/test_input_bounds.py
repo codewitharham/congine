@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from congine_core.config import FailMode, Region
+from congine_core.config import FailMode
 from congine_core.usecases.validate_contract_usecase import ValidateContractUseCase
 from tests.conftest import FakeEventBus, FakeLogger, FakeSchemaStorage, ImmediateTimer
 from congine_core.domain.validator import LocalValidator

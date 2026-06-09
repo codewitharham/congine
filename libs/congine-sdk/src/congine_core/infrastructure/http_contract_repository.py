@@ -116,8 +116,7 @@ class HttpContractRepository:
 
         max_bytes = self.config.max_http_response_bytes
         try:
-            limits = httpx.Limits(max_response=max_bytes)
-            async with httpx.AsyncClient(timeout=10.0, limits=limits) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 if len(response.content) > max_bytes:

@@ -34,8 +34,8 @@ def test_iter_errors_surfaces_multiple_violations() -> None:
     breaches = sv.validate({"age": -5}, _SCHEMA)
     assert len(breaches) >= 2
     assert all(b.rule == "SEMANTIC_SCHEMA" for b in breaches)
-    messages = " ".join(b.message or "" for b in breaches)
-    assert "name" in messages  # missing required property reported
+    assert any(b.field == "<root>" for b in breaches)
+    assert any(b.field == "age" for b in breaches)
 
 
 def test_missing_required_is_root_field() -> None:
@@ -67,8 +67,8 @@ def test_type_violation_field_path() -> None:
 
 
 def test_format_assertions_enabled() -> None:
-    # L1: `format` is enforced (off by default in jsonschema).
-    sv = JsonSchemaSemanticValidator()
+    # Format checking is opt-in (FIX-03); enable explicitly when needed.
+    sv = JsonSchemaSemanticValidator(format_checking=True)
     schema = {
         "type": "object",
         "properties": {"email": {"type": "string", "format": "email"}},

@@ -93,7 +93,11 @@ These are the SDK's reason for existing — each has a dedicated guard and tests
    SHA-256; writes are atomic (`tempfile + os.replace`); symlinks/non-owner files
    refused on load.
 5. **No ReDoS** — schema-supplied patterns/values are length-capped (1000 / 50 000
-   chars, fail-closed) and use `re2` (linear-time) when `[redos]` is installed.
+   chars, fail-closed) and always use `google-re2` (required core dependency).
+6. **Multi-tenant isolation** — `CONGINE_DEPLOYMENT_MODE=multi_tenant` disables
+   `get_default()`; use `ServiceContainer.for_tenant()` or explicit `container=`.
+7. **PII-safe telemetry** — breach messages are sanitized before publish; logs
+   auto-redact on non-local URLs unless `CONGINE_LOG_REDACTION=off`.
 
 `tests/adversarial/` exercises 1, 5, and remediations specifically. Treat changes
 near these as security-sensitive (see `SECURITY.md` for in/out-of-scope).
@@ -106,7 +110,7 @@ features import lazily and raise/skip when their extra is absent:
 - `[langchain]` → `CongineCallbackHandler` adapter.
 - `[stats]` → `KSDriftEngine` drift detection (NumPy); raises
   `CongineConfigurationError` if NumPy missing.
-- `[redos]` → `re2` linear-time regex backend.
+- `[redos]` → backward-compatible alias (`google-re2` is already a core dep).
 - `[dev]` → pytest + ruff toolchain.
 
 ## Conventions

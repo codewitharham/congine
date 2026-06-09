@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
 from congine_core.domain import validator as validator_mod
 from congine_core.domain.validator import (

@@ -54,7 +54,14 @@ class CongineCallbackHandler(_BaseCallbackHandler):  # type: ignore[misc,valid-t
         self._contract_id = contract_id
         self._version = version
         self._payload_key = payload_key
-        self._max_buffer_chars = self._container.config.max_stream_buffer_chars
+        from congine_core.security_limits import DEFAULT_MAX_STREAM_BUFFER_CHARS
+
+        container_config = getattr(self._container, "config", None)
+        self._max_buffer_chars = (
+            container_config.max_stream_buffer_chars
+            if container_config is not None
+            else DEFAULT_MAX_STREAM_BUFFER_CHARS
+        )
 
         self._lock = threading.Lock()
         self._buffers: Dict[Any, List[str]] = {}

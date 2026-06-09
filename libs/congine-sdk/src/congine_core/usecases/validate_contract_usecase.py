@@ -70,11 +70,15 @@ class ValidateContractUseCase:
         except TimeoutError:
             result = self._degraded_on_timeout(contract_id, started)
         except (MemoryError, RecursionError) as exc:
-            result = self._degraded_on_error(contract_id, started, exc, "resource_error")
+            result = self._degraded_on_error(
+                contract_id, started, exc, "resource_error"
+            )
         except CongineBaseException:
             raise
         except Exception as exc:
-            result = self._degraded_on_error(contract_id, started, exc, "internal_error")
+            result = self._degraded_on_error(
+                contract_id, started, exc, "internal_error"
+            )
 
         return self._finalize(result, contract_id, contract_version)
 
@@ -105,11 +109,15 @@ class ValidateContractUseCase:
         except TimeoutError:
             result = self._degraded_on_timeout(contract_id, started)
         except (MemoryError, RecursionError) as exc:
-            result = self._degraded_on_error(contract_id, started, exc, "resource_error")
+            result = self._degraded_on_error(
+                contract_id, started, exc, "resource_error"
+            )
         except CongineBaseException:
             raise
         except Exception as exc:
-            result = self._degraded_on_error(contract_id, started, exc, "internal_error")
+            result = self._degraded_on_error(
+                contract_id, started, exc, "internal_error"
+            )
 
         return self._finalize(result, contract_id, contract_version)
 
