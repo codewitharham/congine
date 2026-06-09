@@ -16,12 +16,12 @@ pip install congine-sdk
 
 ### Optional extras
 
-| Extra        | Purpose                                                            | Install                                  |
-| ------------ | ------------------------------------------------------------------ | ---------------------------------------- |
-| `langchain`  | LangChain `BaseCallbackHandler` integration                        | `pip install 'congine-sdk[langchain]'`   |
-| `stats`      | KS-test drift detection (requires NumPy)                           | `pip install 'congine-sdk[stats]'`       |
-| `redos`      | Linear-time regex backend (`re2`) for the rule engine              | `pip install 'congine-sdk[redos]'`       |
-| `dev`        | Test / lint toolchain (pytest, pytest-asyncio, pytest-cov, ruff)   | `pip install 'congine-sdk[dev]'`         |
+| Extra       | Purpose                                                          | Install                                |
+| ----------- | ---------------------------------------------------------------- | -------------------------------------- |
+| `langchain` | LangChain `BaseCallbackHandler` integration                      | `pip install 'congine-sdk[langchain]'` |
+| `stats`     | KS-test drift detection (requires NumPy)                         | `pip install 'congine-sdk[stats]'`     |
+| `redos`     | Linear-time regex backend (`re2`) for the rule engine            | `pip install 'congine-sdk[redos]'`     |
+| `dev`       | Test / lint toolchain (pytest, pytest-asyncio, pytest-cov, ruff) | `pip install 'congine-sdk[dev]'`       |
 
 `congine-sdk[redos]` is recommended for any deployment that ingests adversarial user input — pattern length caps are still applied by default, but `re2` provides hard linear-time guarantees.
 
@@ -65,35 +65,35 @@ The async path goes through the **same bounded, load-shedding executor** as the 
 
 Every field of `CongineConfig` is settable via `CONGINE_*` environment variables and read by `CongineConfig.from_env()`.
 
-| Field                         | Env var                                | Default     | Description                                                                              |
-| ----------------------------- | -------------------------------------- | ----------- | ---------------------------------------------------------------------------------------- |
-| `base_url`                    | `CONGINE_BASE_URL`                     | `http://localhost:8080` | Control-plane URL.                                                          |
-| `api_key`                     | `CONGINE_API_KEY`                      | _required for non-local_ | API key.                                                                  |
-| `project_id`                  | `CONGINE_PROJECT_ID`                   | _required for non-local_ | Project identifier.                                                       |
-| `tenant_id`                   | `CONGINE_TENANT_ID`                    | _required for non-local_ | Tenant identifier (multi-tenant isolation).                               |
-| `region`                      | `CONGINE_REGION`                       | `us`        | `us` \| `eu` \| `apac`.                                                                  |
-| `validation_timeout_ms`       | `CONGINE_TIMEOUT_MS`                   | `100`       | Hard ceiling per validation. Pure rule-engine runs in <1ms; budget covers semantic.      |
-| `fail_mode`                   | `CONGINE_FAIL_MODE`                    | `degrade`   | `strict` \| `degrade` \| `silent`. See **Failure modes**.                                |
-| `cache_capacity`              | `CONGINE_CACHE_CAPACITY`               | `500`       | O(1) LFU cache max entries.                                                              |
-| `cache_ttl_seconds`           | `CONGINE_CACHE_TTL`                    | `300`       | Default TTL per cached schema.                                                           |
-| `sync_enabled`                | `CONGINE_SYNC_ENABLED`                 | `false`     | Start the periodic background sync worker on bootstrap.                                  |
-| `sync_interval_seconds`       | `CONGINE_SYNC_INTERVAL`                | `300`       | Background sync cadence.                                                                 |
-| `semantic_validation_enabled` | `CONGINE_SEMANTIC_VALIDATION`          | `false`     | Compose `jsonschema` validator on top of the rule engine.                                |
-| `drift_threshold`             | `CONGINE_DRIFT_THRESHOLD`              | `0.1`       | KS-test p-value below which drift is flagged. Requires `[stats]`.                        |
-| `drift_sample_limit`          | `CONGINE_DRIFT_SAMPLE_LIMIT`           | `500`       | Reference-window cap for the drift engine.                                               |
-| `validation_max_workers`      | `CONGINE_VALIDATION_WORKERS`           | `10`        | Concurrent validation worker threads.                                                    |
-| `validation_max_pending`      | `CONGINE_VALIDATION_PENDING`           | `10`        | Pending slots before load is shed. Capacity = workers + pending.                         |
-| `snapshot_dir`                | `CONGINE_SNAPSHOT_DIR`                 | per-user OS-app dir | Per-user snapshot location (NOT world-shared `/tmp`).                            |
-| `require_https`               | `CONGINE_REQUIRE_HTTPS`                | `true`      | Enforce HTTPS on non-local control planes. **Secure default**.                           |
-| `allow_cleartext`             | `CONGINE_ALLOW_CLEARTEXT`              | `false`     | Explicit opt-out for dev / internal use. Emits a loud warning at boot.                   |
-| `log_level`                   | `CONGINE_LOG_LEVEL`                    | `INFO`      | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`.                                               |
-| `log_safe_fields`             | `CONGINE_LOG_SAFE_FIELDS`              | _none_      | Comma-separated allowlist for structured-extra logging keys (PII safety).                |
-| `breaker_failure_threshold`   | `CONGINE_BREAKER_FAILURE_THRESHOLD`    | `5`         | Consecutive failures before the circuit breaker trips OPEN.                              |
-| `breaker_cooldown_seconds`    | `CONGINE_BREAKER_COOLDOWN_SECONDS`     | `30.0`      | Seconds the breaker stays OPEN before allowing a HALF_OPEN probe.                        |
-| `deployment_mode`             | `CONGINE_DEPLOYMENT_MODE`              | `single_tenant` | `multi_tenant` disables `get_default()` — use explicit containers.                    |
-| `max_payload_bytes`           | `CONGINE_MAX_PAYLOAD_BYTES`            | `1048576`   | Max validation payload size (bytes).                                                     |
-| `semantic_format_checking`    | `CONGINE_SEMANTIC_FORMAT_CHECKING`     | `false`     | Enable jsonschema format assertions (off by default for safety).                         |
-| `start_background_services`   | `CONGINE_START_BACKGROUND_SERVICES`    | `true`      | Start telemetry/cache daemons at container init.                                         |
+| Field                         | Env var                             | Default                  | Description                                                                         |
+| ----------------------------- | ----------------------------------- | ------------------------ | ----------------------------------------------------------------------------------- |
+| `base_url`                    | `CONGINE_BASE_URL`                  | `http://localhost:8080`  | Control-plane URL.                                                                  |
+| `api_key`                     | `CONGINE_API_KEY`                   | _required for non-local_ | API key.                                                                            |
+| `project_id`                  | `CONGINE_PROJECT_ID`                | _required for non-local_ | Project identifier.                                                                 |
+| `tenant_id`                   | `CONGINE_TENANT_ID`                 | _required for non-local_ | Tenant identifier (multi-tenant isolation).                                         |
+| `region`                      | `CONGINE_REGION`                    | `us`                     | `us` \| `eu` \| `apac`.                                                             |
+| `validation_timeout_ms`       | `CONGINE_TIMEOUT_MS`                | `100`                    | Hard ceiling per validation. Pure rule-engine runs in <1ms; budget covers semantic. |
+| `fail_mode`                   | `CONGINE_FAIL_MODE`                 | `degrade`                | `strict` \| `degrade` \| `silent`. See **Failure modes**.                           |
+| `cache_capacity`              | `CONGINE_CACHE_CAPACITY`            | `500`                    | O(1) LFU cache max entries.                                                         |
+| `cache_ttl_seconds`           | `CONGINE_CACHE_TTL`                 | `300`                    | Default TTL per cached schema.                                                      |
+| `sync_enabled`                | `CONGINE_SYNC_ENABLED`              | `false`                  | Start the periodic background sync worker on bootstrap.                             |
+| `sync_interval_seconds`       | `CONGINE_SYNC_INTERVAL`             | `300`                    | Background sync cadence.                                                            |
+| `semantic_validation_enabled` | `CONGINE_SEMANTIC_VALIDATION`       | `false`                  | Compose `jsonschema` validator on top of the rule engine.                           |
+| `drift_threshold`             | `CONGINE_DRIFT_THRESHOLD`           | `0.1`                    | KS-test p-value below which drift is flagged. Requires `[stats]`.                   |
+| `drift_sample_limit`          | `CONGINE_DRIFT_SAMPLE_LIMIT`        | `500`                    | Reference-window cap for the drift engine.                                          |
+| `validation_max_workers`      | `CONGINE_VALIDATION_WORKERS`        | `10`                     | Concurrent validation worker threads.                                               |
+| `validation_max_pending`      | `CONGINE_VALIDATION_PENDING`        | `10`                     | Pending slots before load is shed. Capacity = workers + pending.                    |
+| `snapshot_dir`                | `CONGINE_SNAPSHOT_DIR`              | per-user OS-app dir      | Per-user snapshot location (NOT world-shared `/tmp`).                               |
+| `require_https`               | `CONGINE_REQUIRE_HTTPS`             | `true`                   | Enforce HTTPS on non-local control planes. **Secure default**.                      |
+| `allow_cleartext`             | `CONGINE_ALLOW_CLEARTEXT`           | `false`                  | Explicit opt-out for dev / internal use. Emits a loud warning at boot.              |
+| `log_level`                   | `CONGINE_LOG_LEVEL`                 | `INFO`                   | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`.                                          |
+| `log_safe_fields`             | `CONGINE_LOG_SAFE_FIELDS`           | _none_                   | Comma-separated allowlist for structured-extra logging keys (PII safety).           |
+| `breaker_failure_threshold`   | `CONGINE_BREAKER_FAILURE_THRESHOLD` | `5`                      | Consecutive failures before the circuit breaker trips OPEN.                         |
+| `breaker_cooldown_seconds`    | `CONGINE_BREAKER_COOLDOWN_SECONDS`  | `30.0`                   | Seconds the breaker stays OPEN before allowing a HALF_OPEN probe.                   |
+| `deployment_mode`             | `CONGINE_DEPLOYMENT_MODE`           | `single_tenant`          | `multi_tenant` disables `get_default()` — use explicit containers.                  |
+| `max_payload_bytes`           | `CONGINE_MAX_PAYLOAD_BYTES`         | `1048576`                | Max validation payload size (bytes).                                                |
+| `semantic_format_checking`    | `CONGINE_SEMANTIC_FORMAT_CHECKING`  | `false`                  | Enable jsonschema format assertions (off by default for safety).                    |
+| `start_background_services`   | `CONGINE_START_BACKGROUND_SERVICES` | `true`                   | Start telemetry/cache daemons at container init.                                    |
 
 ---
 
@@ -112,11 +112,11 @@ container.bootstrap()
 
 ## Failure modes
 
-| Mode      | Behaviour on validation failure                                          | Use when                                  |
-| --------- | ------------------------------------------------------------------------ | ----------------------------------------- |
-| `strict`  | Raises `CongineValidationError`; telemetry is published **before** the raise. | Compliance-critical paths.                |
-| `degrade` | Logs a warning, publishes telemetry, returns the (possibly invalid) result. | Default — gracefully degrades.            |
-| `silent`  | Publishes telemetry, returns the result, **no error log**.               | Background passes or A/B-testing flows.   |
+| Mode      | Behaviour on validation failure                                               | Use when                                |
+| --------- | ----------------------------------------------------------------------------- | --------------------------------------- |
+| `strict`  | Raises `CongineValidationError`; telemetry is published **before** the raise. | Compliance-critical paths.              |
+| `degrade` | Logs a warning, publishes telemetry, returns the (possibly invalid) result.   | Default — gracefully degrades.          |
+| `silent`  | Publishes telemetry, returns the result, **no error log**.                    | Background passes or A/B-testing flows. |
 
 `SchemaCacheMissException` always raises (a cache miss is not a validation failure), regardless of `fail_mode`.
 
@@ -126,14 +126,14 @@ container.bootstrap()
 
 The SDK is a strict 6-tier hexagonal monolith — outer layers depend on inner ones, never the reverse:
 
-| Layer | Path                                              | Purpose                                                          |
-| ----- | ------------------------------------------------- | ---------------------------------------------------------------- |
-| L0    | `congine_core.{config,exceptions}`                | Pure data, zero deps. Frozen `CongineConfig`, exception hierarchy. |
-| L1    | `congine_core.ports`                              | `typing.Protocol` seams (`IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`). |
-| L2    | `congine_core.domain`                             | Pure business logic — `RuleEngine`, `LocalValidator`, `CompositeValidator`. |
-| L3    | `congine_core.usecases`                           | Orchestration — `ValidateContractUseCase`, `SyncContractsUseCase`. |
-| L4    | `congine_core.infrastructure`                     | Concrete implementations — `LFUCache`, `HttpContractRepository`, `QueueEventBus`, `BoundedValidationExecutor`, `CircuitBreaker`, ... |
-| L5    | `congine_core.adapters`                           | Composition root + framework adapters — `ServiceContainer`, `congine_guard`, `CongineCallbackHandler` (langchain). |
+| Layer | Path                               | Purpose                                                                                                                               |
+| ----- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| L0    | `congine_core.{config,exceptions}` | Pure data, zero deps. Frozen `CongineConfig`, exception hierarchy.                                                                    |
+| L1    | `congine_core.ports`               | `typing.Protocol` seams (`IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`). |
+| L2    | `congine_core.domain`              | Pure business logic — `RuleEngine`, `LocalValidator`, `CompositeValidator`.                                                           |
+| L3    | `congine_core.usecases`            | Orchestration — `ValidateContractUseCase`, `SyncContractsUseCase`.                                                                    |
+| L4    | `congine_core.infrastructure`      | Concrete implementations — `LFUCache`, `HttpContractRepository`, `QueueEventBus`, `BoundedValidationExecutor`, `CircuitBreaker`, ...  |
+| L5    | `congine_core.adapters`            | Composition root + framework adapters — `ServiceContainer`, `congine_guard`, `CongineCallbackHandler` (langchain).                    |
 
 The L1 directory was renamed `repositories/` → `ports/` — the seams are not all repository ports (`ILogger`, `IEventBus`, `IValidationRunner` are not).
 
@@ -143,16 +143,16 @@ The L1 directory was renamed `repositories/` → `ports/` — the seams are not 
 
 `ServiceContainer.health()` returns a dict with the following keys — suitable for `/healthz` and operator dashboards:
 
-| Key                          | Meaning                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------ |
-| `cache_entries`              | Live entries in the schema cache.                                        |
-| `validation_in_flight`       | Outstanding work in the bounded executor (workers + pending).            |
-| `validation_rejected_total`  | Cumulative load-shed (rejected) validations.                             |
-| `telemetry_queue_depth`      | Approximate buffered telemetry events.                                   |
-| `telemetry_dropped_total`    | Cumulative lost events (queue-full + ship-failure). Loss signal.         |
-| `sync_running`               | Background sync worker state.                                            |
-| `drift_reference_samples`    | Drift-engine reference-window depth (requires `[stats]`).                |
-| `breaker_state`              | Circuit breaker state — `CLOSED` \| `OPEN` \| `HALF_OPEN`.               |
+| Key                         | Meaning                                                          |
+| --------------------------- | ---------------------------------------------------------------- |
+| `cache_entries`             | Live entries in the schema cache.                                |
+| `validation_in_flight`      | Outstanding work in the bounded executor (workers + pending).    |
+| `validation_rejected_total` | Cumulative load-shed (rejected) validations.                     |
+| `telemetry_queue_depth`     | Approximate buffered telemetry events.                           |
+| `telemetry_dropped_total`   | Cumulative lost events (queue-full + ship-failure). Loss signal. |
+| `sync_running`              | Background sync worker state.                                    |
+| `drift_reference_samples`   | Drift-engine reference-window depth (requires `[stats]`).        |
+| `breaker_state`             | Circuit breaker state — `CLOSED` \| `OPEN` \| `HALF_OPEN`.       |
 
 ---
 

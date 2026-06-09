@@ -1,4 +1,5 @@
 # AMCE — Phase 3: Simulation Harness & Enterprise Extensions
+
 **Days 35–45 | Gold Set Extraction, Benchmarking Engine, REST Gateway, GDPR Compliance**
 
 ---
@@ -15,6 +16,7 @@ Phase 3 also upgrades the token bucket rate limiter to Redis-backed Lua scripts 
 multi-worker correctness, and adds circuit breakers around all external API calls.
 
 **Key deliverables:**
+
 - `GoldSetExtractor` with SimHash diversity filtering from ClickHouse
 - `BenchmarkingEngine` with `asyncio.TaskGroup` parallel replay and Rc scoring
 - `BenchmarkReport` with field-level divergence heatmap and efficiency-based model recommendation
@@ -73,6 +75,7 @@ External callers (any language: Python, Go, Node, Java)
 ## Source Tree
 
 ### MVP Layout — Monorepo + Monolith
+
 > Phase 3 adds four new top-level subdirectories inside `amce_telemetry` and a new library
 > (`libs/benchmark-engine`). The simulation harness is a separate library because it will be
 > independently published and independently consumed by multiple future services.
@@ -223,6 +226,7 @@ amce-monorepo/
 ```
 
 ### Future Microservice Extraction Path
+
 > Phase 3 adds the two remaining services that will complete the microservices topology.
 
 ```
@@ -320,10 +324,12 @@ CREATE INDEX idx_benchmark_runs_tenant ON benchmark_runs(tenant_id, started_at D
 to use as the benchmark gold set. SimHash ensures no two test inputs are structurally identical.
 
 **Files created:**
+
 - `libs/benchmark-engine/src/amce_benchmark/extractors/gold_set.py`
 - `apps/telemetry-plane/alembic/versions/008_gold_sets.py`
 
 **SimHash algorithm:**
+
 ```python
 def simhash_64(obj: dict) -> int:
     """64-bit SimHash of a JSON object's structural content."""
@@ -341,6 +347,7 @@ def hamming_distance(a: int, b: int) -> int:
 ```
 
 **Diversity selection:**
+
 ```python
 selected = []
 for candidate in candidates:
@@ -352,12 +359,14 @@ for candidate in candidates:
 ```
 
 **Critical edge cases:**
+
 - SimHash on < 4 bigrams: unconditionally include (too few tokens for stable fingerprint)
 - Empty ClickHouse result: return `GoldSet(size=0, items=[])` — never raise
 - `input_hash` collision: `DISTINCT input_hash` in SQL query handles this correctly
 - Stratified sampling flag: `sample by toYYYYMMDD(created_at)` for temporal diversity
 
 **Verification:**
+
 ```bash
 # 5,000 events → diversity filter → no two items within Hamming distance 3
 pytest libs/benchmark-engine/tests/unit/test_gold_set.py::test_diversity_filter -v
@@ -377,10 +386,12 @@ pytest libs/benchmark-engine/tests/unit/test_gold_set.py::test_simhash_determini
 An operator should know the financial cost of a benchmark before running it.
 
 **Files created:**
+
 - `libs/benchmark-engine/src/amce_benchmark/engines/benchmarking.py`
 - `libs/benchmark-engine/src/amce_benchmark/engines/model_clients.py`
 
 **BenchmarkConfig model:**
+
 ```python
 class ModelConfig(BaseModel, frozen=True):
     provider:                  str       # 'openai' | 'anthropic'
@@ -400,6 +411,7 @@ class BenchmarkConfig(BaseModel, frozen=True):
 ```
 
 **Cost estimation:**
+
 ```python
 def estimate_cost(config: BenchmarkConfig) -> CostEstimate:
     per_model = {}
@@ -415,6 +427,7 @@ def estimate_cost(config: BenchmarkConfig) -> CostEstimate:
 ```
 
 **Critical edge cases:**
+
 - `api_key_env` is the env var **name** — fetch via `os.environ.get(config.api_key_env)` at runtime
 - Missing env var: raise `BenchmarkConfigError` **before** any API calls start
 - Global timeout: `asyncio.wait_for(run_all_benchmarks(), timeout=3600)` — 1-hour hard cap
@@ -428,9 +441,11 @@ def estimate_cost(config: BenchmarkConfig) -> CostEstimate:
 task failures. A single model API error must never abort the entire benchmark run.
 
 **Files created:**
+
 - `libs/benchmark-engine/src/amce_benchmark/engines/benchmarking.py` (continued)
 
 **TaskGroup with per-task exception isolation:**
+
 ```python
 async def run(self, config: BenchmarkConfig) -> BenchmarkReport:
     results: dict[str, list[ModelRunResult]] = defaultdict(list)
@@ -457,19 +472,21 @@ async def _safe_run_one(self, model, item, results):
 ```
 
 **Rc formula:**
+
 ```
 Rc = count(status == 'pass') / len(gold_set.items)
 ```
 
 **Field-level divergence formulas:**
 
-| Field type | Formula |
-|-----------|---------|
-| Enum / string exact | `1.0` if mismatch, `0.0` if match |
-| Numeric | `abs(base_val - cand_val) / max(range_max - range_min, 1)` |
-| Text (embedding) | `1.0 - cosine_similarity(embed(base), embed(candidate))` |
+| Field type          | Formula                                                    |
+| ------------------- | ---------------------------------------------------------- |
+| Enum / string exact | `1.0` if mismatch, `0.0` if match                          |
+| Numeric             | `abs(base_val - cand_val) / max(range_max - range_min, 1)` |
+| Text (embedding)    | `1.0 - cosine_similarity(embed(base), embed(candidate))`   |
 
 **Critical edge cases:**
+
 - `asyncio.TaskGroup` cancels all tasks on unhandled exception: wrap each task in `_safe_run_one`
 - Base model timeout: divergence `= None` for all fields on that item (no partial divergence)
 - Embedding batching: call `model.encode(all_texts_for_model)` once per model, not per field
@@ -483,18 +500,21 @@ Rc = count(status == 'pass') / len(gold_set.items)
 signal — the primary output that operators use to make model selection decisions.
 
 **Files created:**
+
 - `libs/benchmark-engine/src/amce_benchmark/reporting/report.py`
 - `apps/telemetry-plane/src/amce_telemetry/routers/benchmarks.py`
 - `apps/telemetry-plane/src/amce_telemetry/simulation/job_manager.py`
 - `apps/telemetry-plane/alembic/versions/009_benchmark_runs.py`
 
 **Efficiency score formula:**
+
 ```
 efficiency_score_raw  = Rc / max(total_cost_usd, 0.0001)   # cap prevents ÷0
 efficiency_score_norm = score_raw / max(all_candidates_raw) # normalise to [0,1]
 ```
 
 **Recommendation logic:**
+
 ```python
 eligible = [m for m in candidates if m.rc_score >= 0.70]
 if not eligible:
@@ -504,6 +524,7 @@ else:
 ```
 
 **Poll-based async pattern:**
+
 ```
 POST /api/v1/benchmarks → {benchmark_id, status: 'RUNNING'}  HTTP 202
 GET  /api/v1/benchmarks/{id} → {status: 'RUNNING'}           (poll)
@@ -511,6 +532,7 @@ GET  /api/v1/benchmarks/{id} → {status: 'COMPLETE', report}  (done)
 ```
 
 **Critical edge cases:**
+
 - Long-running benchmark (500 LLM calls): HTTP must not stay open — BackgroundTask mandatory
 - Zero-cost model (`cost=0`, open-source): `max(cost, 0.0001)` prevents infinity
 - Max 3 concurrent benchmark runs per tenant: `dict[tenant_id, asyncio.Semaphore(3)]`
@@ -524,9 +546,11 @@ GET  /api/v1/benchmarks/{id} → {status: 'COMPLETE', report}  (done)
 that can make an HTTP request can enforce an AMCE contract — no SDK installation required.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/routers/gateway.py`
 
 **Request/Response:**
+
 ```python
 class GatewayValidationRequest(BaseModel):
     contract_id:     str
@@ -544,6 +568,7 @@ class GatewayValidationResponse(BaseModel):
 ```
 
 **Request flow (synchronous — awaits result):**
+
 ```
 1. Extract tenant from API key (ApiKeyGuard)
 2. Load schema from LFU cache (AmceClient.get_schema())
@@ -554,6 +579,7 @@ class GatewayValidationResponse(BaseModel):
 ```
 
 **Payload safety guards:**
+
 ```python
 # 1MB body limit
 if len(await request.body()) > 1_048_576:
@@ -571,6 +597,7 @@ timeout_ms = max(100, request.timeout_ms)   # minimum 100ms regardless of input
 — gateway may be called at 1,000+ req/sec; management endpoints at <1 req/sec
 
 **Critical edge cases:**
+
 - Cache miss on `contract_id`: synchronous reload (one-time penalty), never 404
 - Deep nesting attack: `_max_depth()` recursive function with `limit=10` short-circuit
 - `emit_telemetry=False`: skip BackgroundTask entirely — no Kafka publish, faster response
@@ -584,10 +611,12 @@ breakers so that external API failures (Kafka, LLM APIs) fail fast rather than a
 blocked threads.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/middleware/rate_limit_redis.py`
 - `apps/telemetry-plane/src/amce_telemetry/circuit_breaker.py`
 
 **Redis Lua script (atomic check-and-decrement):**
+
 ```lua
 -- KEYS[1] = bucket key
 -- ARGV[1] = capacity, ARGV[2] = refill_rate (tokens/sec), ARGV[3] = now_seconds
@@ -616,6 +645,7 @@ end
 ```
 
 **Circuit Breaker state machine:**
+
 ```
 CLOSED ──[5 failures]──► OPEN ──[60s timeout]──► HALF_OPEN
   ▲                                                    │
@@ -626,11 +656,13 @@ In HALF_OPEN:  asyncio.Lock ensures exactly ONE probe request at a time
 ```
 
 **Wired to:**
+
 - `TelemetryProducer.publish()` — Kafka failures
 - `BenchmarkingEngine._call_model()` — LLM API failures
 - `ClickHouseClient.bulk_insert()` — ClickHouse failures
 
 **Critical edge cases:**
+
 - Lua script in Redis cluster mode: must use `KEYS[1]` for correct slot assignment
 - HALF_OPEN `asyncio.Lock`: prevents multiple simultaneous probes from all succeeding
 - Redis connection pool: `aioredis pool_size=20`, log WARNING at > 80% utilisation
@@ -643,10 +675,12 @@ In HALF_OPEN:  asyncio.Lock ensures exactly ONE probe request at a time
 a US ClickHouse cluster — this is a GDPR compliance requirement, not a preference.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/compliance/data_residency.py`
 - `apps/telemetry-plane/alembic/versions/010_data_boundary.py`
 
 **Routing decision flow:**
+
 ```python
 class DataResidencyPolicy:
     def route_request(self, tenant_id: UUID, target_region: str) -> RoutingDecision:
@@ -662,17 +696,20 @@ class DataResidencyPolicy:
 ```
 
 **HTTP 451 response:**
+
 ```json
 {
-  "error":            "DATA_RESIDENCY_VIOLATION",
-  "tenant_region":    "EU",
+  "error": "DATA_RESIDENCY_VIOLATION",
+  "tenant_region": "EU",
   "requested_region": "US",
-  "regulation":       "GDPR"
+  "regulation": "GDPR"
 }
 ```
+
 Response headers: `Cache-Control: no-store` — never cache a residency policy error
 
 **ClickHouse dual-region routing:**
+
 ```python
 # infrastructure/clickhouse_client.py
 _pools = {
@@ -686,6 +723,7 @@ def get_client(self, tenant_id: UUID) -> ClickHouseClient:
 ```
 
 **Critical edge cases:**
+
 - `NULL` region in organizations: treat as `'US'`, log WARNING for data backfill
 - EU cluster unavailable: EU tenant telemetry MUST fail (no US fallback) — DLQ to EU-local storage only
 - 451 response headers: `Cache-Control: no-store` — CDN must not cache this
@@ -698,10 +736,12 @@ def get_client(self, tenant_id: UUID) -> ClickHouseClient:
 of GDPR. The DeletionCertificate is a legally auditable record retained for 7 years.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/compliance/gdpr_service.py`
 - `apps/telemetry-plane/src/amce_telemetry/compliance/encryption.py`
 
 **AES-256-GCM encryption (nonce-per-operation, critical for security):**
+
 ```python
 def encrypt(self, plaintext: str, tenant_key: bytes) -> str:
     nonce = os.urandom(12)          # MUST be fresh per operation — reuse is catastrophic
@@ -719,14 +759,15 @@ def decrypt(self, token: str, tenant_key: bytes) -> str:
 
 **Anonymisation rules:**
 
-| Field type | Anonymised form |
-|-----------|----------------|
-| Email | `anon_{sha256[:8]}@deleted.amce.io` |
-| Name | `ANONYMISED` |
-| IP address | Zero last octet: `203.0.113.0` |
-| UUID (user_id) | Replace with new random UUID |
+| Field type     | Anonymised form                     |
+| -------------- | ----------------------------------- |
+| Email          | `anon_{sha256[:8]}@deleted.amce.io` |
+| Name           | `ANONYMISED`                        |
+| IP address     | Zero last octet: `203.0.113.0`      |
+| UUID (user_id) | Replace with new random UUID        |
 
 **ClickHouse deletion (asynchronous mutation):**
+
 ```python
 # Trigger deletion
 mutation_id = await ch_client.execute(
@@ -743,6 +784,7 @@ while True:
 ```
 
 **DeletionCertificate model:**
+
 ```python
 class DeletionCertificate(BaseModel, frozen=True):
     tenant_id:              UUID
@@ -755,6 +797,7 @@ class DeletionCertificate(BaseModel, frozen=True):
 ```
 
 **Critical edge cases:**
+
 - Export ZIP streaming: use `zipfile.ZipFile` with `compression=ZIP_DEFLATED`, chunk writes — never fully materialise in memory
 - AES-GCM nonce reuse: `os.urandom(12)` per call — this is the only safe pattern
 - GDPR impersonation: verify `user_id` belongs to requesting `org_id` before any deletion
@@ -768,6 +811,7 @@ class DeletionCertificate(BaseModel, frozen=True):
 in the security audit checklist must be green before the phase sign-off.
 
 **Files created:**
+
 - `apps/telemetry-plane/tests/integration/phase3_suite.py`
 - `docs/security_audit.md`
 - `docs/performance_baseline.md`
@@ -775,27 +819,28 @@ in the security audit checklist must be green before the phase sign-off.
 
 **Grafana dashboard metrics (via OpenTelemetry):**
 
-| Panel | Metric | Alert threshold |
-|-------|--------|----------------|
-| Validation throughput | `amce_validations_per_second` | < 100/s |
-| Gateway p99 latency | `amce_gateway_p99_ms` | > 50ms |
-| Kafka consumer lag | `amce_kafka_consumer_lag` | > 5,000 events |
-| ClickHouse insert rate | `amce_clickhouse_insert_rows_per_sec` | < 100/s |
-| Cache hit rate | `amce_cache_hit_rate` | < 85% |
-| Circuit breaker state | `amce_circuit_breaker_state` | OPEN (any) |
+| Panel                  | Metric                                | Alert threshold |
+| ---------------------- | ------------------------------------- | --------------- |
+| Validation throughput  | `amce_validations_per_second`         | < 100/s         |
+| Gateway p99 latency    | `amce_gateway_p99_ms`                 | > 50ms          |
+| Kafka consumer lag     | `amce_kafka_consumer_lag`             | > 5,000 events  |
+| ClickHouse insert rate | `amce_clickhouse_insert_rows_per_sec` | < 100/s         |
+| Cache hit rate         | `amce_cache_hit_rate`                 | < 85%           |
+| Circuit breaker state  | `amce_circuit_breaker_state`          | OPEN (any)      |
 
 **Security audit checklist (`docs/security_audit.md`):**
 
-| Check | Tool | Status |
-|-------|------|--------|
-| SQL injection | Parameterised queries in all repos | ✓ |
-| XSS | `Content-Type: application/json` on all responses | ✓ |
-| SSRF | No user-controlled URLs fetched server-side | ✓ |
-| Secrets in logs | `grep -r 'api_key\|password' logs/` | ✓ |
-| Rate limiting | Token bucket on all public endpoints | ✓ |
-| CORS wildcard | No `*` in production CORS config | ✓ |
+| Check           | Tool                                              | Status |
+| --------------- | ------------------------------------------------- | ------ |
+| SQL injection   | Parameterised queries in all repos                | ✓      |
+| XSS             | `Content-Type: application/json` on all responses | ✓      |
+| SSRF            | No user-controlled URLs fetched server-side       | ✓      |
+| Secrets in logs | `grep -r 'api_key\|password' logs/`               | ✓      |
+| Rate limiting   | Token bucket on all public endpoints              | ✓      |
+| CORS wildcard   | No `*` in production CORS config                  | ✓      |
 
 **Performance target:**
+
 ```
 1,000 SDK validations/second sustained for 60 seconds
   → gateway p50  < 20ms
@@ -811,6 +856,7 @@ in the security audit checklist must be green before the phase sign-off.
 required for enterprise sales. The RBAC matrix is also the ground truth for permission testing.
 
 **Files created:**
+
 - `docs/soc2/CC6.1-access-control.md`
 - `docs/soc2/CC6.7-transmission-security.md`
 - `docs/soc2/CC7.2-incident-management.md`
@@ -819,16 +865,17 @@ required for enterprise sales. The RBAC matrix is also the ground truth for perm
 
 **RBAC matrix structure (25 endpoints × 5 roles = 125 entries):**
 
-| Endpoint | viewer | developer | publisher | admin | super_admin |
-|---------|--------|-----------|-----------|-------|------------|
-| `GET /api/v1/contracts` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `POST /api/v1/contracts` | ✗ | ✓ | ✓ | ✓ | ✓ |
-| `PATCH .../status` | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `POST /api/v1/gateway/validate` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `DELETE /api/v1/gdpr/users/{id}` | ✗ | ✗ | ✗ | ✓ | ✓ |
-| ... (all 25 endpoints) | | | | | |
+| Endpoint                         | viewer | developer | publisher | admin | super_admin |
+| -------------------------------- | ------ | --------- | --------- | ----- | ----------- |
+| `GET /api/v1/contracts`          | ✓      | ✓         | ✓         | ✓     | ✓           |
+| `POST /api/v1/contracts`         | ✗      | ✓         | ✓         | ✓     | ✓           |
+| `PATCH .../status`               | ✗      | ✗         | ✓         | ✓     | ✓           |
+| `POST /api/v1/gateway/validate`  | ✓      | ✓         | ✓         | ✓     | ✓           |
+| `DELETE /api/v1/gdpr/users/{id}` | ✗      | ✗         | ✗         | ✓     | ✓           |
+| ... (all 25 endpoints)           |        |           |           |       |             |
 
 **CI security gates (`.github/workflows/security.yml`):**
+
 ```yaml
 - name: Bandit scan
   run: uv run bandit -r libs/ apps/ -f json -o bandit-report.json
@@ -840,6 +887,7 @@ required for enterprise sales. The RBAC matrix is also the ground truth for perm
 ```
 
 **Critical edge cases:**
+
 - bandit `B101` (assert statements): skip in `tests/` only — never in production code
 - ZAP authentication: configure with test API key before active scan; verify it reaches `/api/v1/contracts`
 - SOC2 evidence currency: each artifact must be dated within the last 30 days
@@ -852,12 +900,14 @@ required for enterprise sales. The RBAC matrix is also the ground truth for perm
 for production deployment and enterprise customer onboarding.
 
 **Files created / finalised:**
+
 - `openapi.json` — auto-generated from FastAPI app
 - `docs/adr/ADR-001` through `ADR-005`
 - `docs/runbook.md` — executable deployment guide
 - `CHANGELOG.md` — full 45-day change log
 
 **OpenAPI export:**
+
 ```bash
 cd apps/telemetry-plane
 python -c '
@@ -872,12 +922,14 @@ with open("../../openapi.json", "w") as f:
 ```
 
 **SDK documentation:**
+
 ```bash
 uv run pdoc --html libs/amce-core-engine/src/amce_core \
     --output-dir docs/sdk/
 ```
 
 **Runbook sections:**
+
 1. Environment variables — all `AMCE_*`, `DATABASE_URL`, `KAFKA_*`, `CLICKHOUSE_*`, `REDIS_URL`
 2. First deployment — `make docker-up`, `make migrate`, `make serve-api`
 3. Kafka topic setup — `python infrastructure/kafka/setup.py`
@@ -886,6 +938,7 @@ uv run pdoc --html libs/amce-core-engine/src/amce_core \
 6. Rollback procedure — `alembic downgrade -1`, redeploy prior Docker tag
 
 **Final test count verification:**
+
 ```bash
 pytest --collect-only 2>&1 | tail -3
 # Expected: >= 375 tests collected
@@ -902,21 +955,21 @@ git push origin v0.1.0-mvp
 
 **Final sign-off checklist:**
 
-| Criterion | Target |
-|-----------|--------|
-| Total tests | ≥ 375 passing |
-| Phase 0 tests | 50/50 |
-| Phase 1 tests | 60/60 |
-| Phase 2 tests | 55/55 |
-| Phase 3 tests | 80/80 |
-| ADRs | 5 written, immutable |
-| OpenAPI endpoints | ≥ 20 documented |
-| Gateway p99 | < 50ms at 1K req/sec |
-| bandit HIGH findings | 0 |
-| unfixed CVEs CVSS ≥ 7.0 | 0 |
-| Cross-tenant data leaks | 0 |
-| GDPR deletion verified | ClickHouse mutation complete |
-| Runbook dry-run | Completed by second engineer |
+| Criterion               | Target                       |
+| ----------------------- | ---------------------------- |
+| Total tests             | ≥ 375 passing                |
+| Phase 0 tests           | 50/50                        |
+| Phase 1 tests           | 60/60                        |
+| Phase 2 tests           | 55/55                        |
+| Phase 3 tests           | 80/80                        |
+| ADRs                    | 5 written, immutable         |
+| OpenAPI endpoints       | ≥ 20 documented              |
+| Gateway p99             | < 50ms at 1K req/sec         |
+| bandit HIGH findings    | 0                            |
+| unfixed CVEs CVSS ≥ 7.0 | 0                            |
+| Cross-tenant data leaks | 0                            |
+| GDPR deletion verified  | ClickHouse mutation complete |
+| Runbook dry-run         | Completed by second engineer |
 
 ---
 

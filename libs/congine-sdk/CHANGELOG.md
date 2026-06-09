@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FIX-14:** `start_background_services` config flag; honest container lifecycle docs.
 
 ### Added
+
 - **Apache-2.0 LICENSE** at the repo root — unblocks OSS distribution and
   commercial use; previously the codebase was implicitly all-rights-reserved.
 - **`CircuitBreaker` (L4)** — process-local in-memory state machine (CLOSED →
@@ -75,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Project URLs and classifiers** in `pyproject.toml` for PyPI metadata.
 
 ### Changed
+
 - **`validation_timeout_ms` default raised from 15 ms to 100 ms** — accommodates
   `CompositeValidator + jsonschema` semantic validation without false-positive
   timeouts under `FailMode.STRICT` (audit D-8).
@@ -93,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implements `health()`, conforming to `IValidationRunner`.
 
 ### Removed
+
 - **`ValidationTimer` public export** — removed from
   `congine_core.__init__` and `congine_core.infrastructure.__init__`. The
   class remains importable from `congine_core.infrastructure.timer` for
@@ -103,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reintroduced removed runtime dependencies on a wheel build.
 
 ### Fixed
+
 - **`tests/adversarial/test_remediations.py:189`** — PEP-758 comma-separated
   `except OSError, NotImplementedError, AttributeError:` parses only on
   CPython 3.14+. Parenthesised so the suite collects on the declared
@@ -112,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SDK's exception family contained (audit D-10).
 
 ### Security
+
 - See **Changed → `require_https` default** above.
 - See **Added → `log_safe_fields` allowlist** above.
 

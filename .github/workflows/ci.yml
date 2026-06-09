@@ -294,6 +294,7 @@ jobs:
 
       - name: Build SDK Distribution
         run: |
+          uv pip install build
           uv run --package congine-sdk python -m build libs/congine-sdk
           ls -lah libs/congine-sdk/dist/
 

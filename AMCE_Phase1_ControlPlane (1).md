@@ -1,4 +1,5 @@
 # AMCE — Phase 1: Control Plane Core & Registry Persistence
+
 **Days 13–24 | FastAPI Backend, PostgreSQL 16 Migrations, Contract CRUD, RBAC, GIN Indexing**
 
 ---
@@ -11,6 +12,7 @@ as a FastAPI application (`apps/telemetry-plane`) backed by PostgreSQL 16 with f
 Security and GIN-indexed JSONB columns.
 
 **Key deliverables:**
+
 - FastAPI application with structured logging, lifespan, CORS, and Alembic migrations
 - Multi-tenant schema: `organizations`, `projects`, `users`, `roles`, `contracts`, `contract_versions`, `telemetry_logs`
 - GIN indexes on `schema_definition` and `validation_rules` JSONB columns
@@ -70,6 +72,7 @@ SDK Client (Phase 0)
 ## Source Tree
 
 ### MVP Layout — Monorepo + Monolith
+
 > Phase 1 lives entirely inside `apps/telemetry-plane`. The name reflects its future purpose
 > (the telemetry plane grows in Phase 2); in Phase 1 it is the control plane monolith.
 
@@ -196,6 +199,7 @@ amce-monorepo/
 ```
 
 ### Future Microservice Extraction Path
+
 > Phase 1's monolith maps cleanly onto two future microservices. The extraction boundary
 > is the `routers/` split — each router becomes its own service with its own DB connection pool.
 
@@ -307,6 +311,7 @@ CREATE INDEX idx_cv_active ON contract_versions(contract_id, id)
 health probes ready for Kubernetes, and the Alembic migration infrastructure.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/main.py`
 - `apps/telemetry-plane/src/amce_telemetry/settings.py`
 - `apps/telemetry-plane/src/amce_telemetry/database.py`
@@ -314,6 +319,7 @@ health probes ready for Kubernetes, and the Alembic migration infrastructure.
 - `apps/telemetry-plane/alembic.ini` + `alembic/env.py`
 
 **structlog configuration (idempotent, guarded by `_configured` flag):**
+
 ```python
 structlog.configure(
     processors=[
@@ -327,6 +333,7 @@ structlog.configure(
 ```
 
 **Middleware stack order (critical — see Day 21 for rationale):**
+
 ```
 1. RequestID      (must be first — sets X-Request-ID for all downstream)
 2. StructLog ctx  (binds request_id from step 1)
@@ -335,12 +342,14 @@ structlog.configure(
 ```
 
 **Critical edge cases:**
+
 - Lifespan DB failure: re-raise to prevent FastAPI from starting on broken instance
 - `AMCE_CORS_ORIGINS='*'` in production: log CRITICAL warning — wildcard prohibited
 - Health endpoint: wrap all dependency checks in try/except — never raise 500 from `/health`
 - structlog `configure()` called twice: `_configured` guard prevents processor duplication
 
 **Verification:**
+
 ```bash
 nx serve telemetry-plane
 curl http://localhost:8000/health
@@ -357,6 +366,7 @@ pytest tests/unit/test_main.py::test_health -v
 first migration — there is no "we'll add RLS later" in AMCE.
 
 **Session variable pattern (set on every authenticated request):**
+
 ```python
 await session.execute(
     text("SET LOCAL app.current_org_id = :tid"),
@@ -366,12 +376,14 @@ await session.execute(
 ```
 
 **Critical edge cases:**
+
 - `FORCE ROW LEVEL SECURITY`: prevents superuser bypass — mandatory on all tables
 - `api_key_hash` CHECK: `LENGTH(api_key_hash) >= 60` — raw keys never stored
 - Cascade deletes: `org DELETE → projects DELETE → contracts DELETE` — test explicitly
 - `plan` as CHECK constraint not ENUM type: avoids migration complexity on new tiers
 
 **Verification:**
+
 ```bash
 make migrate  # alembic upgrade head
 make psql
@@ -390,6 +402,7 @@ SET app.current_org_id = '<org-a-uuid>';
 GIN indexes must be verified with EXPLAIN ANALYZE before this day is signed off.
 
 **Query that must use GIN (verify with EXPLAIN):**
+
 ```sql
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT id, schema_definition
@@ -400,12 +413,14 @@ WHERE schema_definition @> '{"type": "object"}'::jsonb
 ```
 
 **Critical edge cases:**
+
 - JSONB `null` vs SQL NULL: `CHECK(jsonb_typeof(schema_definition) = 'object')` prevents JSON `null`
 - Concurrent version publishing: `SELECT FOR UPDATE` on contract row serialises the transaction
 - `schema_definition` max size: enforce 100KB application-level limit in `CreateContractRequest`
 - Partial index `idx_cv_active`: only indexes `is_active=TRUE` rows — document in code comments
 
 **Repository methods:**
+
 ```python
 # All methods require tenant session variable to be set before call
 async def get_active_version(self, contract_id: UUID) -> ContractVersion | None
@@ -423,11 +438,13 @@ async def activate_version(self, contract_id: UUID, version_id: UUID) -> None
 depends on `ApiKeyGuard` and `permission_required`.
 
 **API key structure:** `{prefix_8_chars}.{secret_32_chars}`
+
 - `prefix` stored in plaintext for fast lookup
 - `secret` bcrypt-hashed at creation time
 - Lookup: `WHERE key_prefix = :prefix AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW())`
 
 **Timing attack prevention:**
+
 ```python
 # 1-5ms random jitter on failed lookups — prevents prefix enumeration
 if not bcrypt.checkpw(secret.encode(), row.key_hash.encode()):
@@ -436,6 +453,7 @@ if not bcrypt.checkpw(secret.encode(), row.key_hash.encode()):
 ```
 
 **RBAC permission check flow:**
+
 ```
 Request arrives →
   ApiKeyGuard extracts org_id from api_keys table →
@@ -446,6 +464,7 @@ Request arrives →
 ```
 
 **Critical edge cases:**
+
 - `expires_at` check in SQL query — never in application code after fetch
 - `permissions='*'` wildcard: documented explicit grant — not inferred from empty array
 - `AUTH_FAILED` audit log INSERT on every failure (BackgroundTask — never blocks response)
@@ -458,6 +477,7 @@ Request arrives →
 optimistic locking, and cursor-based pagination (no OFFSET — it's O(n) on large tables).
 
 **Cursor pagination design:**
+
 ```python
 # Cursor = base64({"created_at": "ISO-timestamp", "id": "uuid"})
 # Query: WHERE (created_at, id) < (:cursor_created_at, :cursor_id)
@@ -466,6 +486,7 @@ optimistic locking, and cursor-based pagination (no OFFSET — it's O(n) on larg
 ```
 
 **State machine for status transitions:**
+
 ```
 draft ──► active ──► deprecated
   │                      ▲
@@ -475,6 +496,7 @@ draft ──► active ──► deprecated
 ```
 
 **Critical edge cases:**
+
 - `schema_definition` injection: reject keys starting with `__` (e.g. `__proto__`, `constructor`)
 - Optimistic locking: `UPDATE ... WHERE updated_at = :expected` — 0 rows → 409 Conflict
 - Pagination cursor tampering: base64-decode, validate both field types, reject malformed → 400
@@ -489,18 +511,19 @@ from publishing breaking schema changes under a MINOR version bump.
 
 **Breaking change categories (8 total):**
 
-| # | Change | Classification |
-|---|--------|---------------|
-| 1 | Remove required field | BREAKING (MAJOR) |
-| 2 | Change field type | BREAKING (MAJOR) |
-| 3 | Remove enum value | BREAKING (MAJOR) |
-| 4 | Add required field | BREAKING (MAJOR) |
-| 5 | Reduce numeric range | BREAKING (MAJOR) |
-| 6 | Add optional field | ADDITIVE (MINOR) |
-| 7 | Add enum value | ADDITIVE (MINOR) |
-| 8 | Change description/metadata only | PATCH |
+| #   | Change                           | Classification   |
+| --- | -------------------------------- | ---------------- |
+| 1   | Remove required field            | BREAKING (MAJOR) |
+| 2   | Change field type                | BREAKING (MAJOR) |
+| 3   | Remove enum value                | BREAKING (MAJOR) |
+| 4   | Add required field               | BREAKING (MAJOR) |
+| 5   | Reduce numeric range             | BREAKING (MAJOR) |
+| 6   | Add optional field               | ADDITIVE (MINOR) |
+| 7   | Add enum value                   | ADDITIVE (MINOR) |
+| 8   | Change description/metadata only | PATCH            |
 
 **Critical edge cases:**
+
 - Version rollback (`v1.0` after `v2.0` active): requires `force=true` flag + audit log entry
 - Concurrent activation: `SELECT FOR UPDATE` → exactly 1 succeeds, others get 409
 - `enum_values` array ordering: sort both before comparison — `["A","B"]` ≡ `["B","A"]`
@@ -513,6 +536,7 @@ from publishing breaking schema changes under a MINOR version bump.
 refresh cycle. It must be cheap to serve at high concurrency.
 
 **Thundering herd prevention:**
+
 ```python
 # Per-(tenant_id, project_id) asyncio.Lock
 _cache: dict[tuple, tuple[dict, str, float]] = {}  # → (bundle, etag, expires_at)
@@ -531,12 +555,14 @@ async def get_active_bundle(tenant_id: UUID, project_id: UUID) -> tuple[dict, st
 ```
 
 **Response headers:**
+
 ```
 ETag: "sha256-of-bundle"
 Cache-Control: max-age=60, must-revalidate
 ```
 
 **Critical edge cases:**
+
 - Multi-worker deployment: app-level cache is per-process — documented; Redis cache in Phase 3
 - ETag: full `hexdigest(32_bytes)` — no truncation
 - Empty project (no active contracts): `{"synced_at": "...", "contracts": []}` → HTTP 200, not 404
@@ -551,15 +577,16 @@ index. Zero sequential scans on tables with more than 1,000 rows — verified, n
 
 **Audit checklist:**
 
-| Query | Expected plan | Index used |
-|-------|-------------|------------|
-| `WHERE schema_definition @> '{"type":"object"}'` | Bitmap Heap Scan | `idx_cv_schema_gin` |
-| `WHERE is_active = TRUE AND contract_id = $1` | Index Scan | `idx_cv_active` |
-| `WHERE tenant_id = $1 ORDER BY created_at DESC` | Index Scan | `idx_contracts_tenant` |
-| `WHERE project_id = $1` | Index Scan | `idx_contracts_project` |
+| Query                                                 | Expected plan    | Index used              |
+| ----------------------------------------------------- | ---------------- | ----------------------- |
+| `WHERE schema_definition @> '{"type":"object"}'`      | Bitmap Heap Scan | `idx_cv_schema_gin`     |
+| `WHERE is_active = TRUE AND contract_id = $1`         | Index Scan       | `idx_cv_active`         |
+| `WHERE tenant_id = $1 ORDER BY created_at DESC`       | Index Scan       | `idx_contracts_tenant`  |
+| `WHERE project_id = $1`                               | Index Scan       | `idx_contracts_project` |
 | `telemetry_logs WHERE tenant_id=$1 AND status='fail'` | Bitmap Heap Scan | `idx_tel_status_tenant` |
 
 **Additional indexes for telemetry (added this day):**
+
 ```sql
 CREATE INDEX idx_tel_tenant_time ON telemetry_logs(tenant_id, created_at DESC);
 CREATE INDEX idx_tel_status_tenant ON telemetry_logs(tenant_id, status)
@@ -567,6 +594,7 @@ CREATE INDEX idx_tel_status_tenant ON telemetry_logs(tenant_id, status)
 ```
 
 **Critical edge cases:**
+
 - GIN does not support `NOT @>` (negative containment) — document, require rewrite
 - Run `ANALYZE` after each migration in CI — without it, cardinality estimates cause wrong plans
 - `autovacuum_vacuum_scale_factor = 0.01` for `contract_versions` — frequent `is_active` updates
@@ -579,6 +607,7 @@ CREATE INDEX idx_tel_status_tenant ON telemetry_logs(tenant_id, status)
 bucket) and correctly ordered in the middleware stack so CORS preflight always passes.
 
 **Token bucket implementation:**
+
 ```python
 @dataclass
 class TokenBucket:
@@ -600,6 +629,7 @@ class TokenBucket:
 ```
 
 **Response headers on every response:**
+
 ```
 X-RateLimit-Limit:     1000
 X-RateLimit-Remaining: 734
@@ -608,6 +638,7 @@ Retry-After:           10   (only on 429)
 ```
 
 **Critical edge cases:**
+
 - CORS **before** rate limiting in stack — OPTIONS preflight must never return 429
 - Bucket dict growth: LRU evict after 10,000 unique API keys
 - `X-Request-ID` from client: validate as UUID before binding — prevents log injection
@@ -620,6 +651,7 @@ Retry-After:           10   (only on 429)
 check must be a database query result cached at auth time — never N+1 per request.
 
 **Permission constants:**
+
 ```python
 # apps/telemetry-plane/src/amce_telemetry/auth/permissions.py
 CONTRACT_READ    = "contract:read"
@@ -631,14 +663,15 @@ ADMIN_ALL        = "*"
 
 **Endpoint permission matrix:**
 
-| Endpoint | Required permission |
-|---------|-------------------|
-| `POST /api/v1/contracts` | `CONTRACT_WRITE` |
-| `GET  /api/v1/contracts` | `CONTRACT_READ` |
-| `PATCH /api/v1/contracts/{id}/status` | `CONTRACT_PUBLISH` |
-| `POST /api/v1/telemetry` | `TELEMETRY_READ` |
+| Endpoint                              | Required permission |
+| ------------------------------------- | ------------------- |
+| `POST /api/v1/contracts`              | `CONTRACT_WRITE`    |
+| `GET  /api/v1/contracts`              | `CONTRACT_READ`     |
+| `PATCH /api/v1/contracts/{id}/status` | `CONTRACT_PUBLISH`  |
+| `POST /api/v1/telemetry`              | `TELEMETRY_READ`    |
 
 **Critical edge cases:**
+
 - Permission aggregation: 10 roles × 50 permissions = aggregate into set at auth time, not per-request DB
 - Circular role inheritance: Phase 1 only supports flat arrays — validate no nested role objects in JSONB
 - Role deletion: `ON DELETE CASCADE` on `user_roles.role_id` — no orphaned assignments
@@ -651,6 +684,7 @@ ADMIN_ALL        = "*"
 The Kafka pipeline is a stub in Phase 1 (mock producer); real Kafka wires up in Phase 2 Day 28.
 
 **Request flow:**
+
 ```
 POST /api/v1/telemetry
   → validate batch (max 500 events, checked in request validator before BackgroundTask)
@@ -663,12 +697,14 @@ POST /api/v1/telemetry
 ```
 
 **Deduplication window:**
+
 ```python
 # 1-minute granularity, in-process TTL dict (Redis in Phase 3)
 dedup_key = sha256(f"{tenant_id}:{contract_id}:{status}:{duration_ms:.6f}:{created_at[:13]}")
 ```
 
 **Critical edge cases:**
+
 - Batch size validation in the router validator (before BackgroundTask) — prevents memory exhaustion
 - Kafka unavailable: all events → DLQ, never silently dropped
 - Dedup dict cleanup: APScheduler sweeps entries older than 2 minutes
@@ -682,15 +718,15 @@ boundaries. No cross-tenant data leaks are acceptable.
 
 **Sign-off checklist:**
 
-| Criterion | Target | Tool |
-|-----------|--------|------|
-| Integration test count | 60/60 passing | pytest |
-| Multi-tenant isolation | 0 leaks across 18 scenarios | direct DB assertions |
-| API p99 under 100 concurrent users | < 100ms | locust / pytest-benchmark |
-| GET /contracts/active with thundering herd | 1 DB fetch for 100 concurrent | asyncio.Lock verification |
-| Rate limit enforcement | 429 on request 1001 | pytest |
-| RBAC enforcement | 403 for wrong permission | pytest |
-| Audit log completeness | entry for every write operation | DB assertion |
+| Criterion                                  | Target                          | Tool                      |
+| ------------------------------------------ | ------------------------------- | ------------------------- |
+| Integration test count                     | 60/60 passing                   | pytest                    |
+| Multi-tenant isolation                     | 0 leaks across 18 scenarios     | direct DB assertions      |
+| API p99 under 100 concurrent users         | < 100ms                         | locust / pytest-benchmark |
+| GET /contracts/active with thundering herd | 1 DB fetch for 100 concurrent   | asyncio.Lock verification |
+| Rate limit enforcement                     | 429 on request 1001             | pytest                    |
+| RBAC enforcement                           | 403 for wrong permission        | pytest                    |
+| Audit log completeness                     | entry for every write operation | DB assertion              |
 
 ```bash
 # Full sign-off run

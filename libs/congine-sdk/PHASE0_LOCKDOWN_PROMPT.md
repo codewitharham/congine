@@ -23,16 +23,16 @@ Last verified: **251 passed**, ruff clean.
 
 ## Key files added/changed
 
-| Area | Files |
-|------|-------|
-| L0 security | `security_limits.py`, `pii_sanitize.py` |
-| L1 ports | `ports/circuit_breaker.py` (`ICircuitBreaker`) |
-| Config | `config.py` — host parsing, bounds, deployment mode |
-| Domain | `validator.py` — required `google-re2` |
-| Validation | `validate_contract_usecase.py`, `jsonschema_validator.py` |
-| DI | `dependency_injection.py` — `for_tenant()`, multi-tenant guard |
-| Adapters | `langchain_handler.py` — shared container, bounded buffers |
-| Tests | `tests/adversarial/test_*.py` (host bypass, PII, bounds, tenants) |
+| Area        | Files                                                             |
+| ----------- | ----------------------------------------------------------------- |
+| L0 security | `security_limits.py`, `pii_sanitize.py`                           |
+| L1 ports    | `ports/circuit_breaker.py` (`ICircuitBreaker`)                    |
+| Config      | `config.py` — host parsing, bounds, deployment mode               |
+| Domain      | `validator.py` — required `google-re2`                            |
+| Validation  | `validate_contract_usecase.py`, `jsonschema_validator.py`         |
+| DI          | `dependency_injection.py` — `for_tenant()`, multi-tenant guard    |
+| Adapters    | `langchain_handler.py` — shared container, bounded buffers        |
+| Tests       | `tests/adversarial/test_*.py` (host bypass, PII, bounds, tenants) |
 
 ## For future Claude Code sessions
 

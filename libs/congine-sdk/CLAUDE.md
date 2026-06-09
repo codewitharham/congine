@@ -13,9 +13,9 @@ and degrades/blocks/heals before the payload reaches application logic.
 Run from the **workspace root** (`congine_workspace/`), not this directory. Targets
 are defined in `project.json` and shell out to `uv`.
 
-| Task | Nx | Direct uv |
-| --- | --- | --- |
-| Test | `nx test congine-sdk` | `uv run --package congine-sdk --extra langchain --extra stats pytest libs/congine-sdk/tests` |
+| Task | Nx                    | Direct uv                                                                                                                       |
+| ---- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Test | `nx test congine-sdk` | `uv run --package congine-sdk --extra langchain --extra stats pytest libs/congine-sdk/tests`                                    |
 | Lint | `nx lint congine-sdk` | `uv run --package congine-sdk ruff format --check libs/congine-sdk && uv run --package congine-sdk ruff check libs/congine-sdk` |
 
 Single test / by name (append to the direct `pytest` command):
@@ -38,23 +38,23 @@ the workspace package manager (e.g. `pnpm nx test congine-sdk`).
 Dependencies point **inward only**; no inner layer imports a concrete from an
 outer layer. (`README.md` and `ARCHITECTURE.md` are the authoritative specs.)
 
-| Layer | Package | Contents |
-| --- | --- | --- |
-| L0 | `config`, `exceptions` | Frozen `CongineConfig`, exception hierarchy. Imported by all, depend on none. |
-| L1 | `ports/` | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`. |
-| L2 | `domain/` | Pure logic + immutable models: `RuleEngine`, `LocalValidator`, `CompositeValidator`, `BreachDetail`, `ValidationResult`. No I/O. |
-| L3 | `usecases/` | Stateless orchestration: `ValidateContractUseCase`, `SyncContractsUseCase`. Depends only on L1 ports. |
-| L4 | `infrastructure/` | Side-effecting impls: `LFUCache`, `HttpContractRepository`, `FileContractRepository`, `QueueEventBus`, `BoundedValidationExecutor`, `CircuitBreaker`, `KSDriftEngine`, `StructuredLogger`. |
-| L5 | `adapters/` | Composition root + framework entry points: `ServiceContainer`, `congine_guard`, `CongineCallbackHandler` (langchain). |
+| Layer | Package                | Contents                                                                                                                                                                                   |
+| ----- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L0    | `config`, `exceptions` | Frozen `CongineConfig`, exception hierarchy. Imported by all, depend on none.                                                                                                              |
+| L1    | `ports/`               | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`.                                                       |
+| L2    | `domain/`              | Pure logic + immutable models: `RuleEngine`, `LocalValidator`, `CompositeValidator`, `BreachDetail`, `ValidationResult`. No I/O.                                                           |
+| L3    | `usecases/`            | Stateless orchestration: `ValidateContractUseCase`, `SyncContractsUseCase`. Depends only on L1 ports.                                                                                      |
+| L4    | `infrastructure/`      | Side-effecting impls: `LFUCache`, `HttpContractRepository`, `FileContractRepository`, `QueueEventBus`, `BoundedValidationExecutor`, `CircuitBreaker`, `KSDriftEngine`, `StructuredLogger`. |
+| L5    | `adapters/`            | Composition root + framework entry points: `ServiceContainer`, `congine_guard`, `CongineCallbackHandler` (langchain).                                                                      |
 
 Critical layering rules when adding/moving code:
 
-- **Protocol placement.** Every protocol injected *across* a layer boundary lives
+- **Protocol placement.** Every protocol injected _across_ a layer boundary lives
   in `ports/` (L1). The sole exception is `IValidator` in `domain/validator.py` —
   an in-domain strategy seam that `LocalValidator`/`CompositeValidator` implement.
   An L1 protocol may reference an L2 value object (e.g. `BreachDetail`) — that is
   an inward reference; prefer a `TYPE_CHECKING` import to keep L1 import-light.
-- **Wiring.** `ServiceContainer.__init__` is the *only* place concretes are
+- **Wiring.** `ServiceContainer.__init__` is the _only_ place concretes are
   constructed. It builds bottom-up (infra → domain → usecases) and injects via
   constructors. No module-level globals; the one sanctioned global is the lazy
   process-wide singleton `ServiceContainer.get_default()`.
@@ -84,7 +84,7 @@ These are the SDK's reason for existing — each has a dedicated guard and tests
 
 1. **Bounded latency / no pool exhaustion** — `BoundedValidationExecutor` caps
    `capacity = max_workers + max_pending` and sheds load with `TimeoutError`
-   rather than queueing unboundedly (sync *and* async).
+   rather than queueing unboundedly (sync _and_ async).
 2. **No control-plane stall on boot** — `CircuitBreaker` short-circuits
    `bootstrap()` to the on-disk snapshot when OPEN (5 failures → OPEN, 30 s cooldown).
 3. **No thundering herd** — `sync_once_single_flight` uses a per-scope

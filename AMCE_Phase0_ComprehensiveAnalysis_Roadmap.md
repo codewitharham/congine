@@ -1,4 +1,5 @@
 # AMCE · Congine SDK — Phase 0 Comprehensive Analysis & Roadmap
+
 **Document Type:** Engineering & Product Analysis — Internal Strategy Guide
 **Scope:** Phase 0 (`congine_core`) completion, architectural integrity, production readiness, and monetization path
 **Sources:** Phase 0 Engineering Blueprint (66pp), Independent Adversarial Audit (`phase0-congine-newAudit.md`), AMCE System Design HLD+LLD (Phase 1 MVP)
@@ -31,18 +32,21 @@ The Congine SDK's Phase 0 validation core (`congine_core`) is **architecturally 
 However, **Phase 0 is not complete** in the engineering sense — there are four categories of gaps that collectively prevent it from reaching production, open-source release, or monetization:
 
 **Category A — Hard Blockers (must fix before any external use):**
+
 - A broken Python version floor claim (`>=3.10` declared, 3.14-only syntax present in tests — the suite cannot even collect on any supported Python)
 - No LICENSE file (legally blocks both open-source release and commercial distribution)
 - No circuit breaker around the control plane (application boot can stall up to 10 seconds per attempt against a hung registry)
 - Broken CI/test invocation in the monorepo tooling (`nx test` target missing `--extra dev`)
 
 **Category B — Architectural Debt (must fix before API surface ossifies):**
+
 - Missing `IValidationRunner` L1 port — the entire timeout/executor layer has no hexagonal seam, violating the architecture's own layering contract
 - `ValidationTimer` dead but still exported — misleads consumers into wiring the unbounded, non-load-shedding implementation
 - `repositories/` directory should be renamed `ports/` before the public API is published
 - L3 `ValidateContractUseCase` names an L4 concrete (`"ValidationTimer"`) in its type hint instead of the L1 port
 
 **Category C — Production Hardening (must fix before enterprise/paying use):**
+
 - HTTPS enforcement defaults to `False` for non-local control planes — credential-bearing SDK ships secrets over HTTP by default
 - N-worker thundering herd: every Gunicorn/Uvicorn worker independently fetches the full contract set on boot
 - 15ms default timeout is too tight once `CompositeValidator` + `jsonschema` semantic validation is active
@@ -50,6 +54,7 @@ However, **Phase 0 is not complete** in the engineering sense — there are four
 - Drift detection crashes without a guard if `[stats]` extra is absent
 
 **Category D — Product/Monetization Gaps:**
+
 - No README, no real quickstart, no config reference
 - No `FileContractRepository` (local-first/GitOps story is unbuilt — this is a core positioning promise)
 - BYOM healing loop is unbuilt (the primary enterprise differentiator)
@@ -65,42 +70,42 @@ The bottom line: **none of these gaps require a rewrite**. Every fix lands insid
 
 The following components are verified-sound by both the Blueprint and the adversarial audit, with evidence at the source level:
 
-| Component | File(s) | Verified State |
-|---|---|---|
-| O(1) LFU cache with TTL + daemon sweeper | `infrastructure/lfu_cache.py` | Correct — Ketan-Shah buckets, single RLock, lazy + sweep expiry, no race found |
-| BoundedValidationExecutor (sync + async) | `infrastructure/bounded_executor.py` | Correct — shared `_acquire_and_submit`, same semaphore and deadline for both paths, re-entrancy inline-run guard |
-| ValidateContractUseCase | `usecases/validate_contract_usecase.py` | Correct — schema resolve, timed execution, telemetry-before-raise ordering verified |
-| RuleEngine (6 static rules) | `domain/validator.py` | Correct — length-capped regex, fail-closed on bad pattern, skips non-string for REGEX_PATTERN |
-| LFUCache concurrency | `lfu_cache.py` | Correct — no double-release, no permit leak |
-| Snapshot advisory lock | `http_contract_repository.py:162` | Correct — portalocker LOCK_EX \| LOCK_NB + atomic os.replace + symlink/owner check |
-| Telemetry-before-raise ordering | `validate_contract_usecase.py:199,:150` | Correct — telemetry event published before STRICT escalation |
-| ReDoS resistance | `validator.py:243–285` | Correct — fail-closed length caps + LRU-compiled patterns |
-| Container lifecycle (no import-time threads) | `dependency_injection.py:45–61` | Correct — lazy double-checked singleton |
-| Failure taxonomy (degrade vs raise vs silent) | `config.py`, `validate_contract_usecase.py` | Correct — three modes mapped correctly |
+| Component                                     | File(s)                                     | Verified State                                                                                                   |
+| --------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| O(1) LFU cache with TTL + daemon sweeper      | `infrastructure/lfu_cache.py`               | Correct — Ketan-Shah buckets, single RLock, lazy + sweep expiry, no race found                                   |
+| BoundedValidationExecutor (sync + async)      | `infrastructure/bounded_executor.py`        | Correct — shared `_acquire_and_submit`, same semaphore and deadline for both paths, re-entrancy inline-run guard |
+| ValidateContractUseCase                       | `usecases/validate_contract_usecase.py`     | Correct — schema resolve, timed execution, telemetry-before-raise ordering verified                              |
+| RuleEngine (6 static rules)                   | `domain/validator.py`                       | Correct — length-capped regex, fail-closed on bad pattern, skips non-string for REGEX_PATTERN                    |
+| LFUCache concurrency                          | `lfu_cache.py`                              | Correct — no double-release, no permit leak                                                                      |
+| Snapshot advisory lock                        | `http_contract_repository.py:162`           | Correct — portalocker LOCK_EX \| LOCK_NB + atomic os.replace + symlink/owner check                               |
+| Telemetry-before-raise ordering               | `validate_contract_usecase.py:199,:150`     | Correct — telemetry event published before STRICT escalation                                                     |
+| ReDoS resistance                              | `validator.py:243–285`                      | Correct — fail-closed length caps + LRU-compiled patterns                                                        |
+| Container lifecycle (no import-time threads)  | `dependency_injection.py:45–61`             | Correct — lazy double-checked singleton                                                                          |
+| Failure taxonomy (degrade vs raise vs silent) | `config.py`, `validate_contract_usecase.py` | Correct — three modes mapped correctly                                                                           |
 
 ### 2.2 What Is Incomplete or Broken
 
-| Gap | Severity | Effort |
-|---|---|---|
-| Python 3.14-only `except` syntax in `test_remediations.py:189` | **BLOCKER** | 5 min |
-| No LICENSE file | **BLOCKER** | 1 hr |
-| No circuit breaker (H4 open from Phase 0 audit) | **BLOCKER** | 1 day |
-| Broken `nx test` target (missing `--extra dev`) | **BLOCKER** | 15 min |
-| Missing `IValidationRunner` L1 port (D-4) | High | 0.5 day |
-| `ValidationTimer` dead but exported | High | 30 min |
-| `repositories/` → `ports/` rename | High | 0.5 day |
-| HTTPS default `False` for non-local planes (D-6) | High | 30 min |
-| N-worker thundering herd on boot (D-7) | High | 0.5 day |
-| 15ms timeout too tight for semantic validation (D-8) | Medium | 30 min |
-| Silent telemetry drops, no `dropped_total` counter (D-10) | Medium | 0.5 day |
-| Numpy-gated drift crashes without guard (D-10) | Medium | 1 hr |
-| `re2` claim in `ARCHITECTURE.md` but not in `pyproject.toml` | Medium | 30 min |
-| Stale `*.egg-info` in VCS (D-9) | Low | 15 min |
-| No real README / quickstart / config table | Medium | 1 day |
-| `FileContractRepository` unbuilt | Medium (product) | 1 day |
-| BYOM healing loop unbuilt | Medium (product) | 2–3 days |
-| No CI version matrix (3.10–3.14) | High | 0.5 day |
-| `__version__` duplicated in `__init__.py` and `pyproject.toml` | Low | 15 min |
+| Gap                                                            | Severity         | Effort   |
+| -------------------------------------------------------------- | ---------------- | -------- |
+| Python 3.14-only `except` syntax in `test_remediations.py:189` | **BLOCKER**      | 5 min    |
+| No LICENSE file                                                | **BLOCKER**      | 1 hr     |
+| No circuit breaker (H4 open from Phase 0 audit)                | **BLOCKER**      | 1 day    |
+| Broken `nx test` target (missing `--extra dev`)                | **BLOCKER**      | 15 min   |
+| Missing `IValidationRunner` L1 port (D-4)                      | High             | 0.5 day  |
+| `ValidationTimer` dead but exported                            | High             | 30 min   |
+| `repositories/` → `ports/` rename                              | High             | 0.5 day  |
+| HTTPS default `False` for non-local planes (D-6)               | High             | 30 min   |
+| N-worker thundering herd on boot (D-7)                         | High             | 0.5 day  |
+| 15ms timeout too tight for semantic validation (D-8)           | Medium           | 30 min   |
+| Silent telemetry drops, no `dropped_total` counter (D-10)      | Medium           | 0.5 day  |
+| Numpy-gated drift crashes without guard (D-10)                 | Medium           | 1 hr     |
+| `re2` claim in `ARCHITECTURE.md` but not in `pyproject.toml`   | Medium           | 30 min   |
+| Stale `*.egg-info` in VCS (D-9)                                | Low              | 15 min   |
+| No real README / quickstart / config table                     | Medium           | 1 day    |
+| `FileContractRepository` unbuilt                               | Medium (product) | 1 day    |
+| BYOM healing loop unbuilt                                      | Medium (product) | 2–3 days |
+| No CI version matrix (3.10–3.14)                               | High             | 0.5 day  |
+| `__version__` duplicated in `__init__.py` and `pyproject.toml` | Low              | 15 min   |
 
 ---
 
@@ -109,42 +114,52 @@ The following components are verified-sound by both the Blueprint and the advers
 ### 3.1 P0 — Critical Blockers
 
 #### D-1: Python 3.14-Only Syntax Breaks the Declared Floor
+
 **File:** `tests/adversarial/test_remediations.py:189`
 **Evidence:**
+
 ```python
 # BROKEN — comma-separated exception syntax is Python 3.14+
 except OSError, NotImplementedError, AttributeError:
 ```
+
 **Impact:** The test suite cannot even collect on CPython 3.10, 3.11, 3.12, or 3.13 — the four Python versions the package explicitly supports. The `requires-python = ">=3.10"` claim in `pyproject.toml` is therefore technically false. Any enterprise buyer or open-source contributor running the standard Python version will hit an immediate import failure in the test layer. The audit result of "201 passed" is only valid on CPython 3.14.2.
 **Fix:** `except (OSError, NotImplementedError, AttributeError):` — one character change, five minutes of work.
 
 #### D-2: Broken CI/Test Invocation
+
 **File:** `project.json:20` (nx `test` target)
 **Evidence:** The nx test target does not pass `--extra dev` (or equivalent) when invoking `uv run pytest`. The dev dependency group containing `pytest`, `ruff`, and `mypy` is not auto-installed by `uv run` without explicit opt-in.
 **Impact:** Any clean-room CI runner will fail to collect tests. The test suite effectively does not run in CI as configured.
 **Fix:** Add `--extra dev` flag to the nx test target, or migrate the toolchain to `[dependency-groups]` (PEP 735), which `uv` auto-installs.
 
 #### D-5: No Circuit Breaker on Control-Plane Boundary (H4 from Phase 0 Blueprint)
+
 **File:** `dependency_injection.py:185`, `http_contract_repository.py:89`
 **Evidence:** `ServiceContainer.bootstrap()` calls `sync_once()` synchronously and inline. `sync_once` drives `asyncio.run(fetch_active_contracts())` with a **10-second** client timeout. There is no CLOSED/OPEN/HALF-OPEN state machine anywhere in the codebase (verified by grep).
 **Impact — three failure modes:**
+
 1. A cold or hung control-plane **stalls application boot for up to 10 seconds per attempt**. Under a 3-retry configuration this is a 30-second startup penalty, which breaks liveness probes and Kubernetes readiness gates.
 2. A flapping background plane burns the full timeout on every sync pass, producing a steady ~7.5s of backoff per failing telemetry batch — a continuous background drain.
 3. A persistent outage creates no "fast fail" path — each worker retries independently, consuming threads.
-**Fix:** Implement a simple `CircuitBreaker` class (L4 infrastructure, wraps both `HttpContractRepository.fetch_active_contracts` and `QueueEventBus._ship`). Add a `breaker_state` key to `health()`. Modify `bootstrap()` to consult the breaker and skip the blocking fetch if OPEN, falling through to snapshot immediately.
+   **Fix:** Implement a simple `CircuitBreaker` class (L4 infrastructure, wraps both `HttpContractRepository.fetch_active_contracts` and `QueueEventBus._ship`). Add a `breaker_state` key to `health()`. Modify `bootstrap()` to consult the breaker and skip the blocking fetch if OPEN, falling through to snapshot immediately.
 
 #### No LICENSE File
+
 **Impact:** Without a LICENSE file, the codebase is legally "all rights reserved" by default in most jurisdictions. This blocks:
+
 - Any open-source contribution or usage
 - Any commercial distribution or resale
 - Any investor or acquirer due diligence
-**Fix:** Add `LICENSE` (Apache-2.0 is the standard for enterprise-friendly Python SDKs; MIT is simpler but provides less patent protection). Also add `SECURITY.md` with a responsible disclosure policy before publishing.
+  **Fix:** Add `LICENSE` (Apache-2.0 is the standard for enterprise-friendly Python SDKs; MIT is simpler but provides less patent protection). Also add `SECURITY.md` with a responsible disclosure policy before publishing.
 
 ### 3.2 P1 — Architectural Debt
 
 #### D-4: Missing IValidationRunner L1 Port
+
 **Evidence:** `validate_contract_usecase.py:27,39` declares `timer: "ValidationTimer"` as its type hint. The container actually injects `BoundedValidationExecutor` (not `ValidationTimer`). There is no `IValidationRunner` protocol in `repositories/` (or anywhere in L1). The `run_with_timeout_async` method is accessed via `getattr` shim at L3 (line `:104`).
 **Architectural impact:** This is the most significant architectural violation in Phase 0. Every other cross-layer collaborator has a proper L1 `typing.Protocol` seam:
+
 - `ISchemaStorage` → `LFUCache`
 - `IContractRepository` → `HttpContractRepository`
 - `IEventBus` → `QueueEventBus`
@@ -153,6 +168,7 @@ except OSError, NotImplementedError, AttributeError:
 
 But the **validation runner** — the component that enforces the system's hardest performance guarantee — has no seam. L3 is implicitly coupled to an L4 concrete. This defeats testability (you cannot inject a mock timer without monkey-patching), and it means any future swap of the executor (e.g., a process-pool variant, a thread-local variant for testing) requires modifying L3 code.
 **Fix:**
+
 ```python
 # repositories/validation_runner.py (new L1 port)
 from typing import Protocol, runtime_checkable, Callable, Any, Awaitable
@@ -162,10 +178,13 @@ class IValidationRunner(Protocol):
     def run_with_timeout(self, fn: Callable[[], Any], timeout_ms: int) -> Any: ...
     async def run_with_timeout_async(self, fn: Callable[[], Any], timeout_ms: int) -> Any: ...
 ```
+
 Then type `ValidateContractUseCase.timer` as `IValidationRunner` and remove the `getattr` shim.
 
 #### D-3/D-11: `ValidationTimer` Dead but Still Exported
+
 **Evidence:** `infrastructure/timer.py::ValidationTimer` is never instantiated anywhere in `src/`. The container wires `BoundedValidationExecutor` as the timer. Yet `ValidationTimer` is still exported in:
+
 - `infrastructure/__init__.py:16,23`
 - `congine_core/__init__.py` (package root)
 
@@ -173,6 +192,7 @@ Then type `ValidateContractUseCase.timer` as `IValidationRunner` and remove the 
 **Fix:** Remove from all public `__init__.py` exports. If the class is kept for legacy reference, move it to `_legacy/` with a deprecation notice pointing to `BoundedValidationExecutor`.
 
 #### D-11: `repositories/` Directory Name Misrepresents the Layer
+
 **Evidence:** The `repositories/` directory (L1) holds not only repository ports (`IContractRepository`, `ISchemaStorage`) but also non-repository ports: `ILogger` (`repositories/logger.py`) and `IEventBus` (`repositories/event_bus.py`). The Blueprint itself acknowledges this: "The directory is named repositories/ but holds non-repository ports too. A future rename to ports/ is tracked in §7."
 **Impact:** Once the public API is published with `from congine_core.repositories import ILogger`, any rename becomes a breaking change. The window to fix this cleanly is now, before publication.
 **Fix:** Rename `repositories/` → `ports/`, update all internal imports, update `ARCHITECTURE.md`. The Blueprint already calls these "L1 protocol seams" — the directory name should match.
@@ -180,19 +200,23 @@ Then type `ValidateContractUseCase.timer` as `IValidationRunner` and remove the 
 ### 3.3 P2 — Production Hardening
 
 #### D-6: HTTPS Default is Insecure for Non-Local Planes
+
 **Evidence:** `config.py:107` — `require_https: bool = False`. `dependency_injection.py:86-93` emits a warning for cleartext but proceeds.
 **Impact:** The SDK carries an API key and telemetry payloads. With `require_https=False` as the default, any deployment that does not explicitly set `CONGINE_REQUIRE_HTTPS=true` ships credentials over plaintext HTTP. The secure default should be inverted.
 **Fix:** Change `require_https: bool = True` in `CongineConfig`. Add an explicit opt-out mechanism (`CONGINE_ALLOW_CLEARTEXT=true`) for development/internal use, with a loud startup warning.
 
 #### D-7: N-Worker Thundering Herd at Boot
+
 **Evidence:** Each Gunicorn/Uvicorn worker spawns its own `ServiceContainer`, which independently calls `bootstrap()` → `sync_once()` → `fetch_active_contracts()`. Under N=8 workers, that is 8 simultaneous full-contract-set fetches against the registry at every deploy.
 **Impact:** At scale (N=16–32 workers, large contract sets), this creates a synchronized registry burst that can saturate the control plane's connection pool exactly when it matters most — during a deployment. The `portalocker` advisory lock makes concurrent snapshot writes safe but does not coordinate the upstream fetch.
 **Fix:** Implement single-flight boot coordination:
+
 1. First worker to boot acquires the portalocker write lock, fetches, and writes the snapshot.
 2. Subsequent workers that fail to acquire the lock immediately skip to `load_snapshot()` (which the first worker just wrote).
 3. Add a jitter of `random.uniform(0, 0.5)` seconds before each worker's fetch attempt to desynchronize.
 
 #### D-8: 15ms Default Timeout is Too Tight for Semantic Validation
+
 **Evidence:** `config.py:85` — `validation_timeout_ms: int = 15`. The test fixtures contradict this: `conftest.py:151` uses 50ms, `test_end_to_end.py:32` uses 200ms.
 **Impact:** `LocalValidator` (rule engine only) executes in microseconds. `CompositeValidator` + `jsonschema.iter_errors()` over a large schema (e.g., a 50-field LLM output schema) can realistically take 20–80ms. With a 15ms ceiling and `FailMode.STRICT`, legitimate payloads are degraded as timeouts. This will produce false-positive breach alerts in production.
 **Fix:** Change the default to `validation_timeout_ms: int = 100`. Update the Blueprint's latency table accordingly. The "sub-200ms" host-perceived SLA is unaffected — 100ms validation budget with O(1) cache lookup + telemetry still lands well within the host budget.
@@ -205,14 +229,14 @@ Then type `ValidateContractUseCase.timer` as `IValidationRunner` and remove the 
 
 The Blueprint defines a strict 6-tier hexagonal monolith. Below is the current actual dependency state:
 
-| Layer | Should Import | Actually Imports | Violations |
-|---|---|---|---|
-| L0 Kernel | nothing | nothing | ✅ Clean |
-| L1 Ports | L0 only (L2 via TYPE_CHECKING) | L0 | ✅ Clean |
-| L2 Domain | L0, own IValidator | L0, own IValidator | ✅ Clean |
-| L3 Use Cases | L1 + L0 | L1 + L0 + `"ValidationTimer"` string hint | ⚠️ String literal names L4 concrete |
-| L4 Infra | L1 + L2 + L0 | L1 + L2 + L0 | ✅ Clean |
-| L5 Adapters | everything | everything | ✅ Clean |
+| Layer        | Should Import                  | Actually Imports                          | Violations                          |
+| ------------ | ------------------------------ | ----------------------------------------- | ----------------------------------- |
+| L0 Kernel    | nothing                        | nothing                                   | ✅ Clean                            |
+| L1 Ports     | L0 only (L2 via TYPE_CHECKING) | L0                                        | ✅ Clean                            |
+| L2 Domain    | L0, own IValidator             | L0, own IValidator                        | ✅ Clean                            |
+| L3 Use Cases | L1 + L0                        | L1 + L0 + `"ValidationTimer"` string hint | ⚠️ String literal names L4 concrete |
+| L4 Infra     | L1 + L2 + L0                   | L1 + L2 + L0                              | ✅ Clean                            |
+| L5 Adapters  | everything                     | everything                                | ✅ Clean                            |
 
 The single real violation is the L3 type hint that names an L4 concrete by string. At runtime this is harmless (the container injects correctly), but it represents a documentation/type-system lie and will confuse anyone reading the use-case layer in isolation. Fixing D-4 (adding `IValidationRunner`) resolves this entirely.
 
@@ -262,6 +286,7 @@ class IValidationRunner(Protocol):
 ```
 
 With this port in place:
+
 - `ValidateContractUseCase.__init__` types `timer: IValidationRunner` (real, not string)
 - The `getattr(self.timer, "run_with_timeout_async", None)` shim at line `:104` is eliminated
 - A test double (`class FakeRunner(IValidationRunner)`) can be injected without any infrastructure
@@ -286,11 +311,11 @@ congine_core:
   ValidationResult / BreachDetail      (domain models)
   CongineBaseException + subtypes      (exception hierarchy)
   CongineCallbackHandler               (LangChain adapter)
-  
+
   # Ports (for custom implementations):
   ISchemaStorage, IContractRepository, IEventBus,
   ILogger, ISemanticValidator, IValidationRunner  ← add this
-  
+
   # NOT exported:
   ValidationTimer, LFUCache internals, BoundedValidationExecutor internals
 ```
@@ -304,6 +329,7 @@ congine_core:
 The adversarial audit confirms these security controls are correctly implemented:
 
 **Snapshot poisoning resistance:** `HttpContractRepository.save_snapshot` (`http_contract_repository.py:120–176`) implements:
+
 1. Per-tenant scope hash — snapshot path includes `scope=sha256(tenant_id+project_id)[:8]`
 2. Symlink refusal — if the snapshot path is a symlink, the write is rejected
 3. Owner check — snapshot directory must be owned by the current process UID
@@ -311,6 +337,7 @@ The adversarial audit confirms these security controls are correctly implemented
 5. Atomic replace — `os.replace()` on a same-directory tempfile ensures the live snapshot is never partially written
 
 **ReDoS resistance:** `domain/validator.py:243–285` implements:
+
 1. Pattern length cap (>1000 chars → breach, not evaluation)
 2. Value length cap (>50,000 chars → skip regex entirely)
 3. LRU-cached `re.compile()` — patterns are not re-compiled on every call
@@ -330,6 +357,7 @@ WARN congine base_url is not HTTPS; API key and telemetry are
 Wait — the warning fires when `base_url` is NOT HTTPS. If it is HTTPS, there is no enforcement of the scheme. The actual risk is when `base_url=http://...` — the key and telemetry travel over HTTP. With `require_https=False` as the default, this is a permitted state.
 
 **Recommended change:**
+
 ```python
 # config.py
 require_https: bool = True  # was: False
@@ -347,6 +375,7 @@ The `StructuredLogger` (`infrastructure/logger.py`) emits structured JSON logs w
 In practice, validation breach details include field values from the LLM payload (e.g., `message: "score 1.4 above maximum 1"`). In a multi-tenant deployment, these log lines go to a shared logging pipeline. If a payload contains PII, it can surface in logs.
 
 **Recommended additions:**
+
 1. A configurable `log_safe_fields` allowlist in `CongineConfig` (default: `contract_id`, `status`, `duration_ms`, `rule`, `field` — but not `message` or `value`)
 2. A `redact(value, field_name) -> str` utility in `StructuredLogger` that checks against the allowlist
 
@@ -440,6 +469,7 @@ This is architecturally unavoidable with `ThreadPoolExecutor` (threads cannot be
 **Impact:** Under sustained load, you can lose thousands of telemetry events with zero observable signal. An operator watching `health()` sees `queue_depth: 10000` (which is a warning signal, but not a loss signal) — they have no way to know how many events were dropped or for how long.
 
 **Fix:**
+
 ```python
 # queue_event_bus.py
 class QueueEventBus:
@@ -473,6 +503,7 @@ Add `telemetry_dropped_total` to `ServiceContainer.health()`.
 **Impact:** A host application that calls `container.evaluate_drift(...)` without installing `congine_core[stats]` gets an unguarded `ImportError` — a crash that is not covered by `CongineBaseException` and therefore bypasses the SDK's blast-radius containment.
 
 **Fix:**
+
 ```python
 # dependency_injection.py
 def evaluate_drift(self, reference, sample) -> DriftResult:
@@ -490,11 +521,11 @@ Additionally, document this requirement prominently in the README's feature matr
 
 The current `health()` dict (`dependency_injection.py:247`) exposes six keys. Recommended additions for production observability:
 
-| New Key | Source | Purpose |
-|---|---|---|
-| `telemetry_dropped_total` | `event_bus.dropped_total()` | Sustained-loss signal |
-| `breaker_state` | `circuit_breaker.state` | Fast-fail signal |
-| `snapshot_age_seconds` | `time.time() - snapshot_mtime` | Schema freshness signal |
+| New Key                        | Source                         | Purpose                     |
+| ------------------------------ | ------------------------------ | --------------------------- |
+| `telemetry_dropped_total`      | `event_bus.dropped_total()`    | Sustained-loss signal       |
+| `breaker_state`                | `circuit_breaker.state`        | Fast-fail signal            |
+| `snapshot_age_seconds`         | `time.time() - snapshot_mtime` | Schema freshness signal     |
 | `config_validation_timeout_ms` | `config.validation_timeout_ms` | Runtime config verification |
 
 ---
@@ -508,11 +539,12 @@ The package declares `requires-python = ">=3.10"` in `pyproject.toml`. This clai
 Beyond the syntax fix, the floor claim requires active proof:
 
 **Required CI matrix:**
+
 ```yaml
 # .github/workflows/ci.yml
 strategy:
   matrix:
-    python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     os: [ubuntu-latest, macos-latest]
 ```
 
@@ -523,6 +555,7 @@ Without this matrix, the floor is marketing, not engineering. Every Python versi
 `ARCHITECTURE.md:48` states the SDK uses "the re2 linear-time engine when installed." There is no `re2` or `google-re2` in any dependency group in `pyproject.toml`. The adversarial ReDoS test (`test_redos.py:46`) is `skipif` — it effectively never runs in CI.
 
 **Options (pick one):**
+
 1. **Add the extra:** `[project.optional-dependencies] redos = ["google-re2>=1.0"]` and wire the conditional import in `validator.py`
 2. **Remove the claim:** Strike the `re2` mention from `ARCHITECTURE.md` and document that protection is length-cap-only
 
@@ -552,6 +585,7 @@ congine_core/
 `src/congine_sdk.egg-info/requires.txt` still lists the pre-Sprint-1 dependency set including `pydantic>=2.13.4` and dev tools as runtime dependencies. A wheel built without regenerating this file would re-introduce removed dependencies.
 
 **Fix:**
+
 1. Add `*.egg-info/` to `.gitignore`
 2. Delete `src/congine_sdk.egg-info/` from the repository
 3. Add a CI step that verifies the wheel's `METADATA` dependencies match `pyproject.toml`
@@ -577,22 +611,23 @@ This section addresses an important strategic alignment issue: the AMCE HLD+LLD 
 
 ### 9.1 Naming Convention Divergence
 
-| Concept | Congine SDK Blueprint | AMCE HLD+LLD |
-|---|---|---|
-| Decorator | `@congine_guard` | `@amce_guard` |
-| Main class | `ServiceContainer` | `AmceClient` |
-| Config class | `CongineConfig` | `AmceConfig` |
-| Fail modes | `DEGRADE / STRICT / SILENT` | `fail_open / fail_closed` (binary) |
-| Default fail mode | `DEGRADE` | `fail_closed` |
-| Package name | `congine_core` | `amce` |
-| Executor | `BoundedValidationExecutor` | `ThreadPoolExecutor(max_workers=4)` (unbounded) |
-| Error base | `CongineBaseException` | `ContractBreachException` |
+| Concept           | Congine SDK Blueprint       | AMCE HLD+LLD                                    |
+| ----------------- | --------------------------- | ----------------------------------------------- |
+| Decorator         | `@congine_guard`            | `@amce_guard`                                   |
+| Main class        | `ServiceContainer`          | `AmceClient`                                    |
+| Config class      | `CongineConfig`             | `AmceConfig`                                    |
+| Fail modes        | `DEGRADE / STRICT / SILENT` | `fail_open / fail_closed` (binary)              |
+| Default fail mode | `DEGRADE`                   | `fail_closed`                                   |
+| Package name      | `congine_core`              | `amce`                                          |
+| Executor          | `BoundedValidationExecutor` | `ThreadPoolExecutor(max_workers=4)` (unbounded) |
+| Error base        | `CongineBaseException`      | `ContractBreachException`                       |
 
 **The core SDK (Blueprint) is the authoritative source.** The HLD document appears to describe an earlier design iteration or a simplified conceptual model for stakeholder communication — not the actual shipped code.
 
 ### 9.2 Architectural Pattern Divergence
 
 The AMCE HLD shows a simpler, non-hexagonal architecture:
+
 - `AmceClient` directly owns both `_validator` and `_worker` — no Use Case layer
 - Guard directly accesses `client._pool.submit(client._validator.validate, ...)` — bypasses L3 orchestration
 - No ports/adapters pattern — concrete dependencies wired directly
@@ -607,6 +642,7 @@ The Congine Blueprint's hexagonal architecture (L0–L5 with proper ports) is si
 The AMCE HLD includes a full NestJS + PostgreSQL backend design (Contract Registry, Telemetry Ingestion). The Congine Blueprint places this firmly in Phase 1+. This is correct — the Python SDK (Phase 0) can operate against any HTTP endpoint that satisfies the contract bundle and telemetry interfaces, including a simple mock or a locally-run registry.
 
 **However**, the Phase 1 backend design in the HLD does not define a formal API contract (OpenAPI spec). Before starting Phase 1 backend work, an OpenAPI specification for:
+
 - `GET /contracts/active` → `ContractBundleDto`
 - `POST /telemetry/ingest/batch` → `202 Accepted`
 
@@ -658,13 +694,13 @@ The validation pool uses `ThreadPoolExecutor`. For pure-Python rule evaluation, 
 
 ### 10.3 Horizontal Scaling Readiness
 
-| Concern | Current State | Phase 1 Need |
-|---|---|---|
-| Multi-process boot burst | ⚠️ Thundering herd | Single-flight coordination (D-7) |
-| Shared schema cache | ✅ Per-process LFU (correct) | Optional Redis adapter (Phase 2) |
-| Cross-process telemetry dedup | N/A (each process sends independently) | Server-side dedup on contract_version+timestamp |
-| Distributed circuit breaker | ❌ Not applicable for in-process | In-memory per-process is correct for Phase 1 |
-| Container/K8s compatibility | ⚠️ Liveness probe stall risk | Fixed by circuit breaker + non-blocking bootstrap |
+| Concern                       | Current State                          | Phase 1 Need                                      |
+| ----------------------------- | -------------------------------------- | ------------------------------------------------- |
+| Multi-process boot burst      | ⚠️ Thundering herd                     | Single-flight coordination (D-7)                  |
+| Shared schema cache           | ✅ Per-process LFU (correct)           | Optional Redis adapter (Phase 2)                  |
+| Cross-process telemetry dedup | N/A (each process sends independently) | Server-side dedup on contract_version+timestamp   |
+| Distributed circuit breaker   | ❌ Not applicable for in-process       | In-memory per-process is correct for Phase 1      |
+| Container/K8s compatibility   | ⚠️ Liveness probe stall risk           | Fixed by circuit breaker + non-blocking bootstrap |
 
 ---
 
@@ -675,23 +711,23 @@ The validation pool uses `ThreadPoolExecutor`. For pure-Python rule evaluation, 
 **Path A: Open-Source Release (community-first)**
 Release `congine_core` as Apache-2.0 or MIT. Build community adoption. Monetize via a managed control plane (SaaS Contract Registry + Dashboard).
 
-*Blockers today:* No LICENSE, broken Python floor, no README, no CI. These are all fixable in 2–3 days of work. Everything else (circuit breaker, IValidationRunner, etc.) is engineering excellence but not a launch blocker for OSS.
+_Blockers today:_ No LICENSE, broken Python floor, no README, no CI. These are all fixable in 2–3 days of work. Everything else (circuit breaker, IValidationRunner, etc.) is engineering excellence but not a launch blocker for OSS.
 
-*Timeline to OSS-ready:* **1 week** of focused work on P0 blockers + README + CI matrix.
+_Timeline to OSS-ready:_ **1 week** of focused work on P0 blockers + README + CI matrix.
 
 **Path B: Commercial SDK (direct sale to enterprises)**
 License the SDK commercially (source or binary). Sell to enterprises that need LLM output governance.
 
-*Blockers today:* No LICENSE (legally can't sell without one), no circuit breaker (enterprises will not deploy a component that can stall their application boot), HTTPS default is wrong, no README/documentation.
+_Blockers today:_ No LICENSE (legally can't sell without one), no circuit breaker (enterprises will not deploy a component that can stall their application boot), HTTPS default is wrong, no README/documentation.
 
-*Timeline to commercial-ready:* **3–4 weeks** — all P0 + P1 items, plus documentation, plus BYOM (the key enterprise differentiator).
+_Timeline to commercial-ready:_ **3–4 weeks** — all P0 + P1 items, plus documentation, plus BYOM (the key enterprise differentiator).
 
 **Path C: Sell the Company/Project**
 Sell the IP, codebase, or company to a larger AI tooling vendor.
 
-*Blockers today:* Same as Path B, plus: the HLD-to-SDK naming divergence needs reconciliation (a buyer will ask "which document is the real architecture?"), and the AMCE project name vs Congine SDK naming needs to be settled.
+_Blockers today:_ Same as Path B, plus: the HLD-to-SDK naming divergence needs reconciliation (a buyer will ask "which document is the real architecture?"), and the AMCE project name vs Congine SDK naming needs to be settled.
 
-*Timeline to acqui-hire/acquisition ready:* **4–6 weeks** — above, plus Phase 1 backend sketch implemented as a working demo.
+_Timeline to acqui-hire/acquisition ready:_ **4–6 weeks** — above, plus Phase 1 backend sketch implemented as a working demo.
 
 ### 11.2 The Key Differentiators (What Makes This Sellable)
 
@@ -751,57 +787,57 @@ Week 5-6 (Differentiator feature):
 
 These must be resolved before any external reviewer, investor, or customer sees the codebase:
 
-| # | Action | File | Effort | Impact |
-|---|---|---|---|---|
-| 1 | Fix `except (OSError, NotImplementedError, AttributeError):` syntax | `tests/adversarial/test_remediations.py:189` | 5 min | Unbreaks Python 3.10–3.13 |
-| 2 | Add `--extra dev` to nx test target | `project.json:20` | 15 min | Unbreaks CI |
-| 3 | Add `LICENSE` file (Apache-2.0) | root | 1 hr | Unblocks all distribution |
-| 4 | Implement `CircuitBreaker` (L4) and integrate into `bootstrap()` and background sync | `infrastructure/circuit_breaker.py`, `dependency_injection.py` | 1 day | Fixes 10s boot stall |
-| 5 | Add CI matrix (Python 3.10–3.14) + ruff + mypy gates | `.github/workflows/ci.yml` | 0.5 day | Proves the floor claim |
+| #   | Action                                                                               | File                                                           | Effort  | Impact                    |
+| --- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------- | ------- | ------------------------- |
+| 1   | Fix `except (OSError, NotImplementedError, AttributeError):` syntax                  | `tests/adversarial/test_remediations.py:189`                   | 5 min   | Unbreaks Python 3.10–3.13 |
+| 2   | Add `--extra dev` to nx test target                                                  | `project.json:20`                                              | 15 min  | Unbreaks CI               |
+| 3   | Add `LICENSE` file (Apache-2.0)                                                      | root                                                           | 1 hr    | Unblocks all distribution |
+| 4   | Implement `CircuitBreaker` (L4) and integrate into `bootstrap()` and background sync | `infrastructure/circuit_breaker.py`, `dependency_injection.py` | 1 day   | Fixes 10s boot stall      |
+| 5   | Add CI matrix (Python 3.10–3.14) + ruff + mypy gates                                 | `.github/workflows/ci.yml`                                     | 0.5 day | Proves the floor claim    |
 
 ### Tier 2: Architectural Debt — Fix Before API Freeze
 
 These must be resolved before the package version is published to PyPI or any documentation is written:
 
-| # | Action | File | Effort | Impact |
-|---|---|---|---|---|
-| 6 | Add `IValidationRunner` L1 port | `ports/validation_runner.py` (new) | 0.5 day | Completes the hexagon |
-| 7 | Update `ValidateContractUseCase` to use `IValidationRunner` | `usecases/validate_contract_usecase.py` | 0.5 day | Removes L3→L4 concrete coupling |
-| 8 | Remove `ValidationTimer` from all exports | `infrastructure/__init__.py`, `congine_core/__init__.py` | 30 min | Removes silent correctness trap |
-| 9 | Rename `repositories/` → `ports/` | all imports | 0.5 day | Name matches meaning before API ossifies |
-| 10 | Change HTTPS default to `True` | `config.py:107` | 30 min | Secure default |
-| 11 | Implement single-flight boot coordination | `usecases/sync_contracts_usecase.py` | 0.5 day | Fixes thundering herd |
+| #   | Action                                                      | File                                                     | Effort  | Impact                                   |
+| --- | ----------------------------------------------------------- | -------------------------------------------------------- | ------- | ---------------------------------------- |
+| 6   | Add `IValidationRunner` L1 port                             | `ports/validation_runner.py` (new)                       | 0.5 day | Completes the hexagon                    |
+| 7   | Update `ValidateContractUseCase` to use `IValidationRunner` | `usecases/validate_contract_usecase.py`                  | 0.5 day | Removes L3→L4 concrete coupling          |
+| 8   | Remove `ValidationTimer` from all exports                   | `infrastructure/__init__.py`, `congine_core/__init__.py` | 30 min  | Removes silent correctness trap          |
+| 9   | Rename `repositories/` → `ports/`                           | all imports                                              | 0.5 day | Name matches meaning before API ossifies |
+| 10  | Change HTTPS default to `True`                              | `config.py:107`                                          | 30 min  | Secure default                           |
+| 11  | Implement single-flight boot coordination                   | `usecases/sync_contracts_usecase.py`                     | 0.5 day | Fixes thundering herd                    |
 
 ### Tier 3: Production Hardening — Fix Before Enterprise Deployment
 
-| # | Action | File | Effort | Impact |
-|---|---|---|---|---|
-| 12 | Raise default `validation_timeout_ms` to 100 | `config.py:85` | 30 min | Stops false-positive timeouts |
-| 13 | Add `dropped_total` counter to `QueueEventBus` + `health()` | `infrastructure/queue_event_bus.py`, `dependency_injection.py` | 0.5 day | Telemetry loss visibility |
-| 14 | Guard `evaluate_drift` with `CongineConfigurationError` | `dependency_injection.py:212` | 1 hr | Prevents unguarded ImportError |
-| 15 | Add `re2` extra to `pyproject.toml` OR remove claim from `ARCHITECTURE.md` | `pyproject.toml` / `ARCHITECTURE.md` | 30 min | Honest capability claim |
-| 16 | Remove stale `*.egg-info` from VCS | `.gitignore`, repo | 15 min | Clean packaging |
-| 17 | Single-source `__version__` via `importlib.metadata` | `congine_core/__init__.py` | 15 min | No version divergence |
-| 18 | Add log redaction framework to `StructuredLogger` | `infrastructure/logger.py` | 1 day | PII safety in multi-tenant logs |
+| #   | Action                                                                     | File                                                           | Effort  | Impact                          |
+| --- | -------------------------------------------------------------------------- | -------------------------------------------------------------- | ------- | ------------------------------- |
+| 12  | Raise default `validation_timeout_ms` to 100                               | `config.py:85`                                                 | 30 min  | Stops false-positive timeouts   |
+| 13  | Add `dropped_total` counter to `QueueEventBus` + `health()`                | `infrastructure/queue_event_bus.py`, `dependency_injection.py` | 0.5 day | Telemetry loss visibility       |
+| 14  | Guard `evaluate_drift` with `CongineConfigurationError`                    | `dependency_injection.py:212`                                  | 1 hr    | Prevents unguarded ImportError  |
+| 15  | Add `re2` extra to `pyproject.toml` OR remove claim from `ARCHITECTURE.md` | `pyproject.toml` / `ARCHITECTURE.md`                           | 30 min  | Honest capability claim         |
+| 16  | Remove stale `*.egg-info` from VCS                                         | `.gitignore`, repo                                             | 15 min  | Clean packaging                 |
+| 17  | Single-source `__version__` via `importlib.metadata`                       | `congine_core/__init__.py`                                     | 15 min  | No version divergence           |
+| 18  | Add log redaction framework to `StructuredLogger`                          | `infrastructure/logger.py`                                     | 1 day   | PII safety in multi-tenant logs |
 
 ### Tier 4: Phase 0 Feature Completion
 
-| # | Action | File | Effort | Impact |
-|---|---|---|---|---|
-| 19 | Write `README.md` with install, quickstart, config table, architecture diagram | `README.md` | 1 day | Required for all distribution paths |
-| 20 | Write `SECURITY.md` | `SECURITY.md` | 0.5 day | Enterprise trust signal |
-| 21 | Implement `FileContractRepository(IContractRepository)` | `infrastructure/file_contract_repository.py` | 1 day | Local-first/GitOps story |
-| 22 | Reconcile AMCE HLD naming with Congine Blueprint | HLD document | 0.5 day | Single authoritative architecture |
+| #   | Action                                                                         | File                                         | Effort  | Impact                              |
+| --- | ------------------------------------------------------------------------------ | -------------------------------------------- | ------- | ----------------------------------- |
+| 19  | Write `README.md` with install, quickstart, config table, architecture diagram | `README.md`                                  | 1 day   | Required for all distribution paths |
+| 20  | Write `SECURITY.md`                                                            | `SECURITY.md`                                | 0.5 day | Enterprise trust signal             |
+| 21  | Implement `FileContractRepository(IContractRepository)`                        | `infrastructure/file_contract_repository.py` | 1 day   | Local-first/GitOps story            |
+| 22  | Reconcile AMCE HLD naming with Congine Blueprint                               | HLD document                                 | 0.5 day | Single authoritative architecture   |
 
 ### Tier 5: Phase 1 Preview Features (Post-Phase-0)
 
-| # | Action | File | Effort | Impact |
-|---|---|---|---|---|
-| 23 | Implement `IModelClient` L1 port | `ports/model_client.py` | 0.5 day | BYOM seam |
-| 24 | Implement `OllamaClient` / `OpenAICompatibleClient` L4 adapters | `infrastructure/` | 1 day | BYOM transport |
-| 25 | Implement `HealContractUseCase` L3 | `usecases/heal_contract_usecase.py` | 1–2 days | BYOM healing loop (the differentiator) |
-| 26 | Write OpenAPI spec for Contract Registry API | `api/openapi.yaml` | 0.5 day | Phase 1 backend alignment |
-| 27 | Implement breaker state persistence (fast cold-boot fail-fast) | `infrastructure/circuit_breaker.py` | 0.5 day | Boot time under persistent outage |
+| #   | Action                                                          | File                                | Effort   | Impact                                 |
+| --- | --------------------------------------------------------------- | ----------------------------------- | -------- | -------------------------------------- |
+| 23  | Implement `IModelClient` L1 port                                | `ports/model_client.py`             | 0.5 day  | BYOM seam                              |
+| 24  | Implement `OllamaClient` / `OpenAICompatibleClient` L4 adapters | `infrastructure/`                   | 1 day    | BYOM transport                         |
+| 25  | Implement `HealContractUseCase` L3                              | `usecases/heal_contract_usecase.py` | 1–2 days | BYOM healing loop (the differentiator) |
+| 26  | Write OpenAPI spec for Contract Registry API                    | `api/openapi.yaml`                  | 0.5 day  | Phase 1 backend alignment              |
+| 27  | Implement breaker state persistence (fast cold-boot fail-fast)  | `infrastructure/circuit_breaker.py` | 0.5 day  | Boot time under persistent outage      |
 
 ---
 
@@ -838,6 +874,7 @@ Phase 0 "done" does not mean feature-complete — it means **production-safe and
 ### 13.3 What This Enables
 
 When all hard criteria pass:
+
 - **Open-source launch** is unblocked — the package can be published to PyPI under a real license with a real CI badge and a real Python floor claim
 - **Enterprise pilots** are unblocked — a paying customer can deploy without risk of boot stalls, credential leaks, or false-positive validation timeouts
 - **Investor/acquirer demos** are unblocked — the architecture is clean, documented, and self-evidently production-quality
@@ -847,4 +884,4 @@ The core insight from this analysis is that **Phase 0 is structurally sound but 
 
 ---
 
-*Analysis generated from: Congine SDK Phase 0 Engineering Blueprint (66pp), Independent Adversarial Audit (phase0-congine-newAudit.md, 179 lines, CPython 3.14.2, 201 passed / 2 skipped), AMCE System Design HLD+LLD. All file and line references are traceable to the source documents.*
+_Analysis generated from: Congine SDK Phase 0 Engineering Blueprint (66pp), Independent Adversarial Audit (phase0-congine-newAudit.md, 179 lines, CPython 3.14.2, 201 passed / 2 skipped), AMCE System Design HLD+LLD. All file and line references are traceable to the source documents._

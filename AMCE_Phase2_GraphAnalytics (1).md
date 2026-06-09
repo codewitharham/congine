@@ -1,4 +1,5 @@
 # AMCE — Phase 2: Graph Analytics, Dependency Mapping & Telemetry Ingestion
+
 **Days 25–34 | BFS Graph Engine, Cycle Detection, Kafka Pipeline, ClickHouse, KS-Test Drift**
 
 ---
@@ -12,6 +13,7 @@ detection with the two-sample KS test, latency SLA tracking, and call-volume ano
 detection.
 
 **Key deliverables:**
+
 - `module_dependencies` adjacency list with self-loop guard, RLS, and BFS recursive CTE
 - `GraphEngine.traverse_forward()` with `visited_path` cycle detection and depth cap=50
 - `BlastRadiusCalculator` with impact scoring and cycle-aware partial reports
@@ -77,6 +79,7 @@ Phase 1 monolith
 ## Source Tree
 
 ### MVP Layout — Monorepo + Monolith
+
 > Phase 2 extends `apps/telemetry-plane` in-place. New modules are added under new
 > subdirectories (`graph/`, `analytics/`, `consumers/`, `infrastructure/`). Nothing from
 > Phase 1 is moved or renamed.
@@ -209,6 +212,7 @@ amce-monorepo/
 ```
 
 ### Future Microservice Extraction Path
+
 > Phase 2 introduces the clearest microservice boundaries in the entire system. The graph
 > domain and the telemetry pipeline are independent enough to extract with minimal coupling.
 
@@ -316,11 +320,13 @@ only structural enforcement the database can provide — the application must ha
 cycles via BFS.
 
 **Files created:**
+
 - `apps/telemetry-plane/alembic/versions/005_graph.py`
 - `apps/telemetry-plane/src/amce_telemetry/graph/repository.py`
 - `apps/telemetry-plane/src/amce_telemetry/graph/models.py`
 
 **Bulk edge insertion pattern (idempotent):**
+
 ```sql
 INSERT INTO module_dependencies (tenant_id, from_module_id, to_module_id, ...)
 VALUES ($1, $2, $3, ...)
@@ -328,11 +334,13 @@ ON CONFLICT (tenant_id, from_module_id, to_module_id) DO NOTHING;
 ```
 
 **Critical edge cases:**
+
 - Self-loop via alias: two UUIDs for same logical module bypass `CHECK` — documented Phase 3 enhancement
 - Cross-tenant edges: validate both `from_module_id` and `to_module_id` belong to caller's tenant **before** INSERT
 - Edge direction convention: `from_module_id` = producer (output), `to_module_id` = consumer (input) — document explicitly
 
 **Verification:**
+
 ```bash
 # Self-loop rejected at DB level
 pytest tests/db/test_migration_005.py::test_self_loop_guard -v
@@ -350,9 +358,11 @@ choice for the MVP (sub-100K edges) — avoids a round-trip per hop and leverage
 query optimiser.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/graph/engine.py`
 
 **BFS CTE structure:**
+
 ```sql
 WITH RECURSIVE dependency_bfs AS (
     -- Anchor: start node
@@ -384,6 +394,7 @@ ORDER BY depth;
 ```
 
 **`TraversalResult` Pydantic model:**
+
 ```
 TraversalResult:
   nodes:             list[GraphNode]
@@ -395,12 +406,14 @@ TraversalResult:
 ```
 
 **Critical edge cases:**
+
 - `ARRAY = ANY()` is O(depth) per hop: at depth 50, 2,500 comparisons max — acceptable
 - Set `statement_timeout = 5000ms` via `SET LOCAL` before executing the CTE
 - Empty graph (no outgoing edges): returns `TraversalResult(nodes=[source], edges=[], cycles=[])`
 - `LIMIT 100000` on final SELECT: prevents runaway memory on unbounded traversals
 
 **Verification:**
+
 ```bash
 # 5-node linear chain → correct depth-ordered nodes
 pytest tests/unit/test_graph_engine.py::test_bfs_linear_chain -v
@@ -420,10 +433,12 @@ pytest tests/unit/test_graph_engine.py::test_medium_graph_performance -v
 product/engineering teams can use to understand breach impact.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/graph/blast_radius.py`
 - `apps/telemetry-plane/src/amce_telemetry/routers/analytics.py` (stub, grows Day 31)
 
 **Impact scoring formula:**
+
 ```
 impact_score = Σ(1 / 2^depth_i)   for each downstream node i
 normalised   = impact_score / Σ(1 / 2^1 + 1/2^2 + ... + 1/2^max_depth)
@@ -431,14 +446,15 @@ normalised   = impact_score / Σ(1 / 2^1 + 1/2^2 + ... + 1/2^max_depth)
 ```
 
 | Depth | Weight |
-|-------|--------|
-| 1 | 0.5000 |
-| 2 | 0.2500 |
-| 3 | 0.1250 |
-| 4 | 0.0625 |
-| ... | ... |
+| ----- | ------ |
+| 1     | 0.5000 |
+| 2     | 0.2500 |
+| 3     | 0.1250 |
+| 4     | 0.0625 |
+| ...   | ...    |
 
 **`BlastRadiusReport` model:**
+
 ```
 BlastRadiusReport:
   affected_modules:    list[AffectedModule]
@@ -450,6 +466,7 @@ BlastRadiusReport:
 ```
 
 **Critical edge cases:**
+
 - Disconnected node: `impact_score=0.0`, `affected_modules=[]` — valid result, not an error
 - `1/2^50 ≈ 8.9e-16`: rounds to 0 in display — clip to 6 decimal places
 - `is_user_facing` missing from `contracts.metadata`: treat as `False`, never raise `KeyError`
@@ -464,11 +481,13 @@ configuration. The producer is used both by the Phase 1 telemetry endpoint stub 
 to real) and by the Phase 3 benchmark engine.
 
 **Files created:**
+
 - `infrastructure/kafka/setup.py`
 - `apps/telemetry-plane/src/amce_telemetry/infrastructure/kafka_producer.py`
 - `apps/telemetry-plane/src/amce_telemetry/infrastructure/kafka_admin.py`
 
 **Producer configuration:**
+
 ```python
 Producer({
     'bootstrap.servers': bootstrap_servers,
@@ -487,12 +506,13 @@ Producer({
 
 **Topic specification:**
 
-| Topic | Partitions | Retention | Notes |
-|-------|-----------|-----------|-------|
-| `amce.telemetry` | 12 | 7 days | `lz4` compression |
-| `amce.telemetry.dlq` | 1 | 30 days | No compression (debuggability) |
+| Topic                | Partitions | Retention | Notes                          |
+| -------------------- | ---------- | --------- | ------------------------------ |
+| `amce.telemetry`     | 12         | 7 days    | `lz4` compression              |
+| `amce.telemetry.dlq` | 1          | 30 days   | No compression (debuggability) |
 
 **Critical edge cases:**
+
 - `AdminClient.create_topics()`: check existence first — idempotent setup script
 - DLQ messages: must be JSON-serialisable — convert `datetime` to ISO string before publish
 - `linger.ms=5` adds 5ms latency — set to 0 in test configuration
@@ -505,10 +525,12 @@ Producer({
 as a separate long-lived process (not as a FastAPI route) with independent restart policy.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/consumers/telemetry_consumer.py`
 - `apps/telemetry-plane/src/amce_telemetry/infrastructure/clickhouse_client.py`
 
 **Consumer loop design:**
+
 ```python
 # At-least-once semantics: commit only after successful ClickHouse insert
 while True:
@@ -522,6 +544,7 @@ while True:
 ```
 
 **Failure handling:**
+
 ```
 ClickHouse insert fails (attempt 1) → retry
 ClickHouse insert fails (attempt 2) → retry
@@ -530,11 +553,13 @@ ClickHouse insert fails (attempt 3) → produce all N events to amce.telemetry.d
 ```
 
 **Critical edge cases:**
+
 - Rebalance during bulk insert: `enable.auto.commit=False` + manual commit ensures at-least-once
 - Consumer lag alert: `> 10,000 messages` → log CRITICAL; heartbeat: 3s / session timeout: 10s
 - `insert_distributed_sync=1` in tests: forces synchronous ClickHouse writes for deterministic assertions
 
 **Process isolation:**
+
 ```bash
 # Development: separate terminal
 uv run python -m amce_telemetry.consumers.telemetry_consumer
@@ -551,28 +576,30 @@ uv run python -m amce_telemetry.consumers.telemetry_consumer
 output values. Alert when a model's output distribution shifts significantly from its baseline.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/analytics/drift_engine.py`
 - `apps/telemetry-plane/alembic/versions/006_drift_reports.py`
 
 **KS test parameters:**
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| Minimum samples | 500 | Below this → false positives from small-sample noise |
-| `ks_threshold` | 0.10 | Maximum ECDF difference to trigger drift |
-| `alpha` | 0.05 | p-value threshold for statistical significance |
-| Baseline window | 30 days | Stable reference distribution |
-| Current window | 24 hours | Recent observation window |
+| Parameter       | Value    | Rationale                                            |
+| --------------- | -------- | ---------------------------------------------------- |
+| Minimum samples | 500      | Below this → false positives from small-sample noise |
+| `ks_threshold`  | 0.10     | Maximum ECDF difference to trigger drift             |
+| `alpha`         | 0.05     | p-value threshold for statistical significance       |
+| Baseline window | 30 days  | Stable reference distribution                        |
+| Current window  | 24 hours | Recent observation window                            |
 
 **Severity mapping:**
 
 | KS statistic | Severity |
-|-------------|---------|
-| > 0.20 | HIGH |
-| > 0.10 | MEDIUM |
-| > 0.00 | LOW |
+| ------------ | -------- |
+| > 0.20       | HIGH     |
+| > 0.10       | MEDIUM   |
+| > 0.00       | LOW      |
 
 **Critical edge cases:**
+
 - Non-numeric fields: skip with WARNING — KS test requires continuous numeric distributions
 - ClickHouse timeout (30-day query on large tenant): use `telemetry_minutely` materialized view + 15s timeout
 - APScheduler `max_instances=1`: prevents overlapping 6-hour runs
@@ -586,11 +613,13 @@ output values. Alert when a model's output distribution shifts significantly fro
 ClickHouse telemetry data, surfaced via the analytics API endpoint.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/analytics/sla_tracker.py`
 - `apps/telemetry-plane/src/amce_telemetry/analytics/volume_monitor.py`
 - `apps/telemetry-plane/alembic/versions/007_sla_events.py`
 
 **ClickHouse SLA query:**
+
 ```sql
 SELECT
     quantile(0.50)(duration_ms) AS p50,
@@ -603,6 +632,7 @@ WHERE tenant_id = {tenant_id:UUID}
 ```
 
 **Z-score computation (with zero-std guard):**
+
 ```python
 def compute_zscore(self, current: float, history: list[float]) -> float | None:
     mean = statistics.mean(history)
@@ -613,6 +643,7 @@ def compute_zscore(self, current: float, history: list[float]) -> float | None:
 ```
 
 **Critical edge cases:**
+
 - `quantile()` vs `quantileExact()`: switch to exact for samples < 1,000 rows (1-2% error in t-Digest)
 - SLA breach suppression: < 100 events in window → no breach emitted (cold start noise)
 - UTC anchors: all `INTERVAL` queries use UTC — never apply local timezone offsets
@@ -626,10 +657,12 @@ def compute_zscore(self, current: float, history: list[float]) -> float | None:
 tracing across all hops and proof that the API never blocks under high event volume.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/otel.py`
 - `apps/telemetry-plane/tests/integration/test_telemetry_pipeline.py`
 
 **OpenTelemetry span hierarchy:**
+
 ```
 HTTP POST /api/v1/telemetry      [FastAPI auto-instrumentation]
   └── kafka.produce              [custom span: telemetry_producer.py]
@@ -638,6 +671,7 @@ HTTP POST /api/v1/telemetry      [FastAPI auto-instrumentation]
 ```
 
 **W3C TraceContext propagation across Kafka:**
+
 ```python
 # Producer: inject trace context into message headers
 from opentelemetry.propagate import inject
@@ -653,6 +687,7 @@ with tracer.start_as_current_span("kafka.consume", context=context):
 ```
 
 **Backpressure verification:**
+
 ```
 10,000 events, 10 concurrent threads
   → API max latency must be < 10ms regardless of queue depth
@@ -661,6 +696,7 @@ with tracer.start_as_current_span("kafka.consume", context=context):
 ```
 
 **Critical edge cases:**
+
 - ClickHouse async insert buffer: poll with 500ms retry up to 15s in tests (not fixed sleep)
 - Kafka consumer group session timeout during slow tests: `heartbeat.interval.ms=3000`
 - `insert_settings={'async_insert': 0}` in tests for synchronous ClickHouse writes
@@ -673,26 +709,36 @@ with tracer.start_as_current_span("kafka.consume", context=context):
 the frontend to directly render the dependency graph without transformation.
 
 **Files created:**
+
 - `apps/telemetry-plane/src/amce_telemetry/routers/graph.py`
 
 **D3.js response format:**
+
 ```json
 {
   "nodes": [
-    {"id": "uuid-string", "name": "summariser-v1",
-     "status": "active", "impact_score": 0.875}
+    {
+      "id": "uuid-string",
+      "name": "summariser-v1",
+      "status": "active",
+      "impact_score": 0.875
+    }
   ],
   "links": [
-    {"source": "uuid-string", "target": "uuid-string",
-     "type": "output_consumer"}
+    {
+      "source": "uuid-string",
+      "target": "uuid-string",
+      "type": "output_consumer"
+    }
   ]
 }
 ```
 
 **Cycles endpoint algorithm:** Tarjan's SCC (Strongly Connected Components) — O(V+E) —
-rather than BFS-from-every-node O(V*(V+E))
+rather than BFS-from-every-node O(V\*(V+E))
 
 **Critical edge cases:**
+
 - UUID serialisation: `str(uuid)` in all JSON output — not `UUID` objects
 - Deleted contract referenced in edges: return placeholder node `{"type": "DELETED"}` — not `KeyError`
 - Large graph response: `summary=true` query parameter returns aggregate statistics only (> 10K nodes)
@@ -705,6 +751,7 @@ rather than BFS-from-every-node O(V*(V+E))
 **Core objective:** Final verification under production-scale data volumes.
 
 **Synthetic 100K-edge graph generation:**
+
 ```python
 # Balanced binary tree of depth 17 → ~131K nodes, ~130K edges
 # Stresses BFS without creating hub nodes that would explode traversal
@@ -719,14 +766,14 @@ def generate_binary_tree(depth: int, tenant_id: UUID) -> list[dict]:
 
 **Sign-off checklist:**
 
-| Criterion | Target | Tool |
-|-----------|--------|------|
-| Integration test count | 55/55 passing | pytest |
-| BFS on 100K-edge graph | < 500ms | pytest-benchmark |
-| ClickHouse bulk insert p99 | < 2s for 10K events | pytest-benchmark |
-| Full drift pipeline | MEDIUM/HIGH severity detected | StatisticalDriftEngine test |
-| E2E telemetry pipeline | 1,000 events in ClickHouse within 15s | integration test |
-| OpenTelemetry trace | 4 spans visible in Jaeger | manual + test |
+| Criterion                  | Target                                | Tool                        |
+| -------------------------- | ------------------------------------- | --------------------------- |
+| Integration test count     | 55/55 passing                         | pytest                      |
+| BFS on 100K-edge graph     | < 500ms                               | pytest-benchmark            |
+| ClickHouse bulk insert p99 | < 2s for 10K events                   | pytest-benchmark            |
+| Full drift pipeline        | MEDIUM/HIGH severity detected         | StatisticalDriftEngine test |
+| E2E telemetry pipeline     | 1,000 events in ClickHouse within 15s | integration test            |
+| OpenTelemetry trace        | 4 spans visible in Jaeger             | manual + test               |
 
 ```bash
 pytest tests/integration/phase2_suite.py -v --tb=short

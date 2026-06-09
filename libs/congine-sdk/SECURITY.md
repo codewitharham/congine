@@ -2,9 +2,9 @@
 
 ## Supported versions
 
-| Version | Supported |
-| ------- | --------- |
-| `0.x`   | ✅ (current Phase 0) |
+| Version | Supported                     |
+| ------- | ----------------------------- |
+| `0.x`   | ✅ (current Phase 0)          |
 | `< 0.1` | ❌ pre-release; do not deploy |
 
 The SDK is pre-1.0 and on a fast iteration cadence; security fixes are released
@@ -21,11 +21,11 @@ in patch versions and announced in [`CHANGELOG.md`](./CHANGELOG.md).
 
 We commit to:
 
-| Step                | SLA               |
-| ------------------- | ----------------- |
-| Initial acknowledgement | within 2 business days |
-| Triage + severity assessment | within 5 business days |
-| Coordinated disclosure date | within 90 days for critical findings |
+| Step                         | SLA                                  |
+| ---------------------------- | ------------------------------------ |
+| Initial acknowledgement      | within 2 business days               |
+| Triage + severity assessment | within 5 business days               |
+| Coordinated disclosure date  | within 90 days for critical findings |
 
 We follow responsible-disclosure norms: please give us time to patch before
 publishing details. We are happy to credit researchers in the changelog
