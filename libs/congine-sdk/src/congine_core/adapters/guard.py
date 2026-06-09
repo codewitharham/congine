@@ -31,8 +31,8 @@ def congine_guard(
     version: str = "latest",
     container: Optional[ServiceContainer] = None,
     mode: str = "envelope",
-    extractor: Optional[Callable[[Any], dict]] = None,
-) -> Callable:
+    extractor: Optional[Callable[[Any], dict[str, Any]]] = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Validate a function's output against a Congine contract.
 
     Args:
@@ -71,9 +71,9 @@ def congine_guard(
             return output
         return {"output": output, "validation_result": validation_result}
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fn)
-        def sync_wrapper(*args, **kwargs) -> Any:
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             ctx = _resolve()
             output = fn(*args, **kwargs)
             validation_result = ctx.validate_contract_usecase.execute(
@@ -84,7 +84,7 @@ def congine_guard(
             return _finish(output, validation_result)
 
         @functools.wraps(fn)
-        async def async_wrapper(*args, **kwargs) -> Any:
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             ctx = _resolve()
             output = await fn(*args, **kwargs)
             # Validation is synchronous and CPU-bound. ``execute_async`` runs it

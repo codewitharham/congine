@@ -28,7 +28,7 @@ from congine_core.ports.logger import ILogger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import TelemetryEvent
-    from congine_core.infrastructure.circuit_breaker import CircuitBreaker
+    from congine_core.ports.circuit_breaker import ICircuitBreaker
 
 #: Default control-plane path for telemetry ingestion.
 _TELEMETRY_PATH = "/api/v1/telemetry"
@@ -48,7 +48,7 @@ class QueueEventBus:
         backoff_max: float = 8.0,
         client_factory: Optional[Callable[[], httpx.Client]] = None,
         start_worker: bool = True,
-        circuit_breaker: "Optional[CircuitBreaker]" = None,
+        circuit_breaker: "Optional[ICircuitBreaker]" = None,
     ) -> None:
         """Args:
         config: Runtime configuration providing the telemetry ``base_url`` and
@@ -284,7 +284,7 @@ class QueueEventBus:
     def _serialize(event: "TelemetryEvent") -> Dict[str, Any]:
         """Serialize a :class:`TelemetryEvent` to a JSON-ready mapping."""
         created_at = getattr(event, "created_at", None)
-        if hasattr(created_at, "isoformat"):
+        if created_at is not None and hasattr(created_at, "isoformat"):
             created_at = created_at.isoformat()
         return {
             "contract_id": getattr(event, "contract_id", None),

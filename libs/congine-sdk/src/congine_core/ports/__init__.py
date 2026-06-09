@@ -7,6 +7,7 @@ ports — so the directory is named ``ports/`` rather than the historical
 API was published).
 """
 
+from congine_core.ports.circuit_breaker import ICircuitBreaker
 from congine_core.ports.contract_repository import IContractRepository
 from congine_core.ports.event_bus import IEventBus
 from congine_core.ports.logger import ILogger
@@ -21,4 +22,5 @@ __all__ = [
     "ILogger",
     "ISemanticValidator",
     "IValidationRunner",
+    "ICircuitBreaker",
 ]

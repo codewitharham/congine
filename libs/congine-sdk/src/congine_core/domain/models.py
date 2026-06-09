@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -37,12 +37,15 @@ class ValidationResult:
         duration_ms: Wall-clock validation time in milliseconds.
         degraded: ``True`` when the result is a timeout/error fallback rather
             than a genuine evaluation.
+        degraded_reason: Optional machine-readable tag when ``degraded`` is
+            ``True`` (e.g. ``"timeout"``, ``"internal_error"``).
     """
 
     status: str
     breaches: Tuple[BreachDetail, ...] = ()
     duration_ms: float = 0.0
     degraded: bool = False
+    degraded_reason: Optional[str] = None
 
     def is_pass(self) -> bool:
         """Return ``True`` if validation passed."""
@@ -89,7 +92,7 @@ class TelemetryEvent:
     contract_version: str
     status: str
     duration_ms: float
-    breach_details: List[Dict] = field(default=None)  # type: ignore[assignment]
+    breach_details: list[dict[str, Any]] = field(default=None)  # type: ignore[arg-type]
     created_at: datetime = field(default=None)  # type: ignore[assignment]
 
     def __post_init__(self) -> None:

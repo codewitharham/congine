@@ -1,34 +1,17 @@
-"""LangChain callback handler (Layer 5).
-
-:class:`CongineCallbackHandler` is an **optional** adapter that validates LLM
-output produced through LangChain against a Congine contract, reusing the exact
-:class:`ValidateContractUseCase` path that ``@congine_guard`` uses.
-
-Optional dependency: ``langchain-core`` is imported lazily inside a
-``try/except`` so importing the core SDK never requires LangChain. The module is
-NOT eagerly imported by :mod:`congine_core` or :mod:`congine_core.adapters`; it
-is reachable via ``congine_core.adapters.langchain_handler`` or the lazy
-``congine_core.adapters.CongineCallbackHandler`` attribute. Instantiating the
-handler without LangChain installed raises a clear :class:`ImportError`.
-
-Thread-safety: ``on_llm_new_token`` may be invoked at high throughput from many
-concurrent runs. Tokens are accumulated per ``run_id`` under a single
-:class:`threading.Lock`; validation runs in ``on_llm_end`` *outside* the lock so
-token ingestion is never serialized behind validation latency.
-"""
+"""LangChain callback handler (Layer 5)."""
 
 from __future__ import annotations
 
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-try:  # Optional dependency.
+try:
     from langchain_core.callbacks.base import (
         BaseCallbackHandler as _BaseCallbackHandler,
     )
 
     _LANGCHAIN_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised only without langchain-core
+except ImportError:  # pragma: no cover
     _BaseCallbackHandler = object  # type: ignore[assignment,misc]
     _LANGCHAIN_AVAILABLE = False
 
@@ -37,17 +20,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import ValidationResult
 
 
-class CongineCallbackHandler(_BaseCallbackHandler):  # type: ignore[misc,valid-type]
-    """Validate streamed/!streamed LLM completions against a Congine contract.
-
-    Args:
-        contract_id: Contract identifier the completion must satisfy.
-        version: Contract version recorded in telemetry (default ``"latest"``).
-        container: A :class:`ServiceContainer`; built from the environment when
-            ``None``.
-        payload_key: Key under which the joined completion text is wrapped into
-            the validation payload dict (the RuleEngine validates mappings).
-    """
+class CongineCallbackHandler(_BaseCallbackHandler):
+    """Validate streamed LLM completions against a Congine contract."""
 
     def __init__(
         self,
@@ -61,42 +35,58 @@ class CongineCallbackHandler(_BaseCallbackHandler):  # type: ignore[misc,valid-t
                 "CongineCallbackHandler requires 'langchain-core'. "
                 "Install it with: pip install congine-sdk[langchain]"
             )
-        # Imported lazily so the module stays import-safe without a container.
         from congine_core.adapters.dependency_injection import ServiceContainer
+        from congine_core.config import DeploymentMode
+        from congine_core.exceptions import CongineConfigurationError
 
-        self._container = container or ServiceContainer.from_env()
+        if container is None:
+            config = __import__(
+                "congine_core.config", fromlist=["CongineConfig"]
+            ).CongineConfig.from_env()
+            if config.deployment_mode is DeploymentMode.MULTI_TENANT:
+                raise CongineConfigurationError(
+                    "CongineCallbackHandler requires an explicit container= "
+                    "in multi_tenant deployment mode."
+                )
+            container = ServiceContainer.get_default()
+        self._container = container
         self._logger = getattr(self._container, "logger", None)
         self._contract_id = contract_id
         self._version = version
         self._payload_key = payload_key
+        from congine_core.security_limits import DEFAULT_MAX_STREAM_BUFFER_CHARS
+
+        container_config = getattr(self._container, "config", None)
+        self._max_buffer_chars = (
+            container_config.max_stream_buffer_chars
+            if container_config is not None
+            else DEFAULT_MAX_STREAM_BUFFER_CHARS
+        )
 
         self._lock = threading.Lock()
         self._buffers: Dict[Any, List[str]] = {}
-        #: Result of the most recent ``on_llm_end`` validation (or ``None``).
+        self._buffer_lengths: Dict[Any, int] = {}
+        self._results: Dict[Any, "ValidationResult"] = {}
         self.last_result: Optional["ValidationResult"] = None
 
-    # ------------------------------------------------------------------ #
-    # LangChain callback surface
-    # ------------------------------------------------------------------ #
     def on_llm_new_token(
         self, token: str, *, run_id: Any = None, **kwargs: Any
     ) -> None:
-        """Accumulate a streamed *token* for its run (O(1), lock-guarded)."""
         with self._lock:
-            self._buffers.setdefault(run_id, []).append(token)
+            current = self._buffer_lengths.get(run_id, 0)
+            if current >= self._max_buffer_chars:
+                return
+            remaining = self._max_buffer_chars - current
+            clipped = token[:remaining]
+            self._buffers.setdefault(run_id, []).append(clipped)
+            self._buffer_lengths[run_id] = current + len(clipped)
 
     def on_llm_end(
         self, response: Any = None, *, run_id: Any = None, **kwargs: Any
     ) -> Optional["ValidationResult"]:
-        """Join the run's tokens and validate the completion against the contract.
-
-        Validation runs outside the accumulation lock. Any error is logged and
-        swallowed so the handler can never break the host LLM run; the result
-        (or ``None`` on error/strict-raise) is also stored on
-        :attr:`last_result`.
-        """
         with self._lock:
             tokens = self._buffers.pop(run_id, [])
+            self._buffer_lengths.pop(run_id, None)
 
         completion = "".join(tokens)
         if not completion and response is not None:
@@ -104,38 +94,44 @@ class CongineCallbackHandler(_BaseCallbackHandler):  # type: ignore[misc,valid-t
 
         payload = {self._payload_key: completion}
         try:
-            self.last_result = self._container.validate_contract_usecase.execute(
+            result = self._container.validate_contract_usecase.execute(
                 payload=payload,
                 contract_id=self._contract_id,
                 contract_version=self._version,
             )
-        except Exception as exc:  # noqa: BLE001 - never break the host stream
+            self._results[run_id] = result
+            self.last_result = result
+            return result
+        except Exception as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            from congine_core.exceptions import CongineBaseException
+
             self.last_result = None
             if self._logger is not None:
                 self._logger.error(
                     "LangChain validation failed",
                     contract_id=self._contract_id,
-                    error=str(exc),
+                    error_type=type(exc).__name__,
                 )
-        return self.last_result
+            if isinstance(exc, CongineBaseException):
+                return None
+            return None
 
     def on_llm_error(
         self, error: BaseException, *, run_id: Any = None, **kwargs: Any
     ) -> None:
-        """Discard a failed run's partial buffer to avoid leaking memory."""
         with self._lock:
             self._buffers.pop(run_id, None)
+            self._buffer_lengths.pop(run_id, None)
+            self._results.pop(run_id, None)
 
-    # ------------------------------------------------------------------ #
-    # Helpers
-    # ------------------------------------------------------------------ #
+    def result_for(self, run_id: Any) -> Optional["ValidationResult"]:
+        """Return the validation result for a specific *run_id*."""
+        return self._results.get(run_id)
+
     @staticmethod
     def _extract_text(response: Any) -> str:
-        """Best-effort extraction of completion text from an ``LLMResult``.
-
-        Used for non-streaming runs where no tokens were emitted. Tolerant of
-        shape differences across LangChain versions.
-        """
         generations = getattr(response, "generations", None)
         if not generations:
             return ""

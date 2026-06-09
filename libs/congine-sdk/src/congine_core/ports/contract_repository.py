@@ -7,7 +7,7 @@ snapshot fallback for stale-ok degraded operation.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -18,7 +18,7 @@ class IContractRepository(Protocol):
     snapshotting; this abstraction lets upper layers depend only on behaviour.
     """
 
-    async def fetch_active_contracts(self) -> List[Dict]:
+    async def fetch_active_contracts(self) -> list[dict[str, Any]]:
         """Fetch the active contracts from the control plane.
 
         Returns:
@@ -30,7 +30,7 @@ class IContractRepository(Protocol):
         """
         ...
 
-    def load_snapshot(self) -> Optional[List[Dict]]:
+    def load_snapshot(self) -> Optional[list[dict[str, Any]]]:
         """Load contracts from the on-disk snapshot (stale-ok fallback).
 
         Returns:
@@ -39,7 +39,7 @@ class IContractRepository(Protocol):
         """
         ...
 
-    def save_snapshot(self, contracts: List[Dict]) -> None:
+    def save_snapshot(self, contracts: list[dict[str, Any]]) -> None:
         """Persist *contracts* to disk atomically.
 
         Args:

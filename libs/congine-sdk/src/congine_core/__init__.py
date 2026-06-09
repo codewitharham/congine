@@ -7,6 +7,7 @@ module is the stable entry point for SDK consumers.
 
 # Layer 1: Abstractions
 from congine_core.ports import (
+    ICircuitBreaker,
     IContractRepository,
     IEventBus,
     ILogger,
@@ -47,7 +48,7 @@ from congine_core.infrastructure import (
 from congine_core.adapters import ServiceContainer, congine_guard
 
 # Config & exceptions
-from congine_core.config import CongineConfig, FailMode, Region
+from congine_core.config import CongineConfig, DeploymentMode, FailMode, Region
 from congine_core.exceptions import (
     CongineBaseException,
     CongineCacheError,
@@ -86,6 +87,7 @@ __all__ = [
     "ILogger",
     "ISemanticValidator",
     "IValidationRunner",
+    "ICircuitBreaker",
     # Domain
     "BreachDetail",
     "ValidationResult",
@@ -115,6 +117,7 @@ __all__ = [
     "CongineConfig",
     "Region",
     "FailMode",
+    "DeploymentMode",
     # Exceptions
     "CongineBaseException",
     "CongineValidationError",

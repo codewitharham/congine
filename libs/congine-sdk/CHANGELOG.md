@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — Phase 0 Lockdown
+
+- **FIX-01:** `is_local_base_url()` now parses hostname exactly (no substring bypass).
+- **FIX-02:** `google-re2` promoted to required core dependency; linear-time regex always on.
+- **FIX-03:** Semantic validation bounded (`semantic_max_breaches`); format checking off by default.
+- **FIX-04:** PII sanitization for breach messages in telemetry and logs; `ValidationResult.degraded_reason`.
+- **FIX-05:** `deployment_mode=multi_tenant` disables `get_default()`; `ServiceContainer.for_tenant()` added.
+- **FIX-06:** Input bounds (`max_payload_bytes`, `max_schema_bytes`, `max_contract_files`, etc.).
+- **FIX-07:** LangChain handler uses shared container; per-run results; bounded stream buffers.
+- **FIX-08:** Auto log redaction for non-local deployments; unconditional sensitive-key blocklist.
+- **FIX-09:** Narrow exception handling in validation/sync/LangChain paths.
+- **FIX-10:** `ICircuitBreaker` L1 port.
+- **FIX-11:** HALF_OPEN single-probe semantics on circuit breaker.
+- **FIX-13:** HTTP response size cap (`max_http_response_bytes`).
+- **FIX-14:** `start_background_services` config flag; honest container lifecycle docs.
+
 ### Added
 - **Apache-2.0 LICENSE** at the repo root — unblocks OSS distribution and
   commercial use; previously the codebase was implicitly all-rights-reserved.

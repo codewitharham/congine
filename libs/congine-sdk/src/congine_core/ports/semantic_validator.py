@@ -13,7 +13,7 @@ the inward arrow used by every layer).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, List, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import BreachDetail
@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 class ISemanticValidator(Protocol):
     """Structural interface for full-schema semantic validation."""
 
-    def validate(self, payload: dict, schema: dict) -> "List[BreachDetail]":
+    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> "List[BreachDetail]":
         """Validate *payload* against *schema*.
 
         Args:

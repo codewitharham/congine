@@ -9,8 +9,9 @@ inheritance) into an :class:`IValidator`.
 from __future__ import annotations
 
 import functools
-import re
 import time
+
+import re2 as _re2  # type: ignore[import-untyped]
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -24,31 +25,23 @@ from typing import (
 )
 
 from congine_core.domain.models import BreachDetail, ValidationResult
+from congine_core.security_limits import MAX_PATTERN_LENGTH, MAX_REGEX_VALUE_LENGTH
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.ports.semantic_validator import ISemanticValidator
 
-# --- ReDoS guard (audit H3) ------------------------------------------------- #
-#: Reject schema-supplied patterns longer than this (untrusted-input budget).
-_MAX_PATTERN_LENGTH = 1000
-#: Fail-closed: do not run a backtracking regex against values longer than this.
-_MAX_REGEX_VALUE_LENGTH = 50_000
+# Backward-compatible aliases for tests and external references.
+_MAX_PATTERN_LENGTH = MAX_PATTERN_LENGTH
+_MAX_REGEX_VALUE_LENGTH = MAX_REGEX_VALUE_LENGTH
 
-try:  # Optional linear-time engine; immune to catastrophic backtracking.
-    import re2 as _re2  # type: ignore[import-not-found]
-
-    _RE2_AVAILABLE = True
-except ImportError:  # pragma: no cover - re2 is an optional, undeclared backend
-    _re2 = None
-    _RE2_AVAILABLE = False
+# google-re2 is a required core dependency (FIX-02) — linear-time matching.
+_RE2_AVAILABLE = True
 
 
 @functools.lru_cache(maxsize=512)
-def _compiled_pattern(pattern: str):
-    """Compile and cache *pattern* (re2 when available, else stdlib ``re``)."""
-    if _RE2_AVAILABLE:
-        return _re2.compile(pattern)
-    return re.compile(pattern)
+def _compiled_pattern(pattern: str) -> Any:
+    """Compile and cache *pattern* using RE2 (linear-time, no catastrophic backtracking)."""
+    return _re2.compile(pattern)
 
 
 #: Mapping from JSON-schema type names to acceptable Python types. ``bool`` is
@@ -63,7 +56,7 @@ _JSON_TYPE_MAP: Dict[str, Tuple[type, ...]] = {
 }
 
 
-def _path_present(payload: dict, dotted_field: str) -> bool:
+def _path_present(payload: dict[str, Any], dotted_field: str) -> bool:
     """Return ``True`` if *dotted_field* resolves to a present key in *payload*.
 
     Supports dot-notation traversal (``"a.b.c"``): each segment must exist and
@@ -102,7 +95,7 @@ class RuleEngine:
     """
 
     @staticmethod
-    def FIELD_PRESENCE(payload: dict, required_fields: List[str]) -> List[BreachDetail]:
+    def FIELD_PRESENCE(payload: dict[str, Any], required_fields: List[str]) -> List[BreachDetail]:
         """Rule 1: every required field must be present in *payload*.
 
         Field names may use dot-notation (``"a.b.c"``) to require nested keys;
@@ -121,7 +114,7 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def TYPE_MATCH(payload: dict, schema_properties: dict) -> List[BreachDetail]:
+    def TYPE_MATCH(payload: dict[str, Any], schema_properties: dict[str, Any]) -> List[BreachDetail]:
         """Rule 2: present fields must match their declared schema type.
 
         *schema_properties* maps field name to either a JSON-schema property
@@ -149,7 +142,7 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def ENUM_VALUES(payload: dict, enum_map: dict) -> List[BreachDetail]:
+    def ENUM_VALUES(payload: dict[str, Any], enum_map: dict[str, Any]) -> List[BreachDetail]:
         """Rule 3: present enum fields must hold an allowed value.
 
         *enum_map* maps field name to a mapping containing an ``"enum"`` list.
@@ -170,7 +163,7 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def RANGE_CHECK(payload: dict, range_map: dict) -> List[BreachDetail]:
+    def RANGE_CHECK(payload: dict[str, Any], range_map: dict[str, Any]) -> List[BreachDetail]:
         """Rule 4: present numeric fields must lie within their range.
 
         *range_map* maps field name to a mapping with optional ``"min"``/
@@ -209,7 +202,7 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def NULL_GUARD(payload: dict, null_forbidden: List[str]) -> List[BreachDetail]:
+    def NULL_GUARD(payload: dict[str, Any], null_forbidden: List[str]) -> List[BreachDetail]:
         """Rule 5: listed fields must not be ``None`` when present."""
         breaches: List[BreachDetail] = []
         for field_name in null_forbidden:
@@ -224,7 +217,7 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def REGEX_PATTERN(payload: dict, pattern_map: dict) -> List[BreachDetail]:
+    def REGEX_PATTERN(payload: dict[str, Any], pattern_map: dict[str, Any]) -> List[BreachDetail]:
         """Rule 6: present string fields must match their regex.
 
         *pattern_map* maps field name to a mapping containing a ``"pattern"``.
@@ -264,7 +257,7 @@ class RuleEngine:
                 continue
             try:
                 matched = _compiled_pattern(pattern).fullmatch(value) is not None
-            except re.error:
+            except _re2.error:
                 breaches.append(
                     BreachDetail(
                         rule="REGEX_PATTERN",
@@ -289,7 +282,7 @@ class RuleEngine:
 class IValidator(Protocol):
     """Interface: a validation strategy."""
 
-    def validate(self, payload: dict, schema: dict) -> ValidationResult:
+    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> ValidationResult:
         """Validate *payload* against *schema*."""
         ...
 
@@ -324,7 +317,7 @@ class LocalValidator:
             self.rules = rules
 
     @staticmethod
-    def _extract_params(rule_name: str, schema: dict) -> Any:
+    def _extract_params(rule_name: str, schema: dict[str, Any]) -> Any:
         """Derive the parameter a given rule expects from *schema*.
 
         Supports JSON-schema-style schemas where per-field constraints live
@@ -359,7 +352,7 @@ class LocalValidator:
             }
         return {}
 
-    def validate(self, payload: dict, schema: dict) -> ValidationResult:
+    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> ValidationResult:
         """Compose all configured rules and return a :class:`ValidationResult`.
 
         Args:
@@ -424,7 +417,7 @@ class CompositeValidator:
         self.rule_validator = rule_validator
         self.semantic_validator = semantic_validator
 
-    def validate(self, payload: dict, schema: dict) -> ValidationResult:
+    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> ValidationResult:
         """Run both validators and merge their breaches.
 
         Args:

@@ -35,8 +35,10 @@ class IValidationRunner(Protocol):
     callers — closing audit H1/H2.
     """
 
-    capacity: int
-    """Total outstanding-work ceiling (workers + pending slots)."""
+    @property
+    def capacity(self) -> int:
+        """Total outstanding-work ceiling (workers + pending slots)."""
+        ...
 
     def run_with_timeout(
         self,

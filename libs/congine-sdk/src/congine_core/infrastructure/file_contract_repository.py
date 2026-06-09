@@ -22,7 +22,7 @@ from __future__ import annotations
 import glob
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Any, Optional
 
 from congine_core.ports.logger import ILogger
 
@@ -30,17 +30,27 @@ from congine_core.ports.logger import ILogger
 class FileContractRepository:
     """Read contracts from a local directory; no network or snapshot persistence."""
 
-    def __init__(self, contracts_dir: str, logger: Optional[ILogger] = None) -> None:
+    def __init__(
+        self,
+        contracts_dir: str,
+        logger: Optional[ILogger] = None,
+        max_contract_files: int = 1000,
+        max_file_bytes: int = 1_048_576,
+    ) -> None:
         """Args:
         contracts_dir: Path to a directory containing ``*.json`` (and optionally
             ``*.yaml``/``*.yml``) contract files. Each file must contain either
             a single contract object or a ``contracts`` envelope.
         logger: Optional :class:`ILogger` for warnings on malformed files.
+        max_contract_files: Stop scanning after this many files (FIX-06).
+        max_file_bytes: Maximum bytes read per contract file.
         """
         self.contracts_dir = contracts_dir
         self.logger = logger
+        self.max_contract_files = max_contract_files
+        self.max_file_bytes = max_file_bytes
 
-    async def fetch_active_contracts(self) -> List[Dict]:
+    async def fetch_active_contracts(self) -> list[dict[str, Any]]:
         """Return every well-formed contract found under :attr:`contracts_dir`.
 
         The method is declared ``async`` to satisfy the
@@ -55,29 +65,28 @@ class FileContractRepository:
                 )
             return []
 
-        contracts: List[Dict] = []
+        contracts: list[dict[str, Any]] = []
         json_files = sorted(
             glob.glob(os.path.join(self.contracts_dir, "**", "*.json"), recursive=True)
-        )
+        )[: self.max_contract_files]
         for path in json_files:
             try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    payload = json.load(fh)
+                payload = self._read_json_file(path)
             except (OSError, json.JSONDecodeError) as exc:
                 if self.logger is not None:
                     self.logger.warning(
                         "Skipping malformed contract file",
                         path=path,
-                        error=str(exc),
+                        error_type=type(exc).__name__,
                     )
                 continue
             contracts.extend(self._extract(payload))
 
         # YAML is optional: only enumerate yaml files if PyYAML is importable.
         try:
-            import yaml  # type: ignore[import-not-found]
+            import yaml  # type: ignore[import-untyped]
         except ImportError:
-            yaml = None  # type: ignore[assignment]
+            yaml = None
         if yaml is not None:
             yaml_files = sorted(
                 glob.glob(
@@ -88,17 +97,16 @@ class FileContractRepository:
                     os.path.join(self.contracts_dir, "**", "*.yaml"),
                     recursive=True,
                 )
-            )
+            )[: max(0, self.max_contract_files - len(json_files))]
             for path in yaml_files:
                 try:
-                    with open(path, "r", encoding="utf-8") as fh:
-                        payload = yaml.safe_load(fh)
-                except (OSError, yaml.YAMLError) as exc:  # type: ignore[attr-defined]
+                    payload = self._read_yaml_file(path, yaml)
+                except (OSError, yaml.YAMLError) as exc:
                     if self.logger is not None:
                         self.logger.warning(
                             "Skipping malformed contract file",
                             path=path,
-                            error=str(exc),
+                            error_type=type(exc).__name__,
                         )
                     continue
                 contracts.extend(self._extract(payload))
@@ -111,11 +119,11 @@ class FileContractRepository:
             )
         return contracts
 
-    def load_snapshot(self) -> Optional[List[Dict]]:
+    def load_snapshot(self) -> Optional[list[dict[str, Any]]]:
         """File source is the snapshot — return ``None`` to force re-read."""
         return None
 
-    def save_snapshot(self, contracts: List[Dict]) -> None:
+    def save_snapshot(self, contracts: list[dict[str, Any]]) -> None:
         """No-op: the file source is itself canonical."""
         if self.logger is not None:
             self.logger.debug(
@@ -123,8 +131,22 @@ class FileContractRepository:
                 count=len(contracts),
             )
 
+    def _read_json_file(self, path: str) -> object:
+        with open(path, "rb") as fh:
+            raw = fh.read(self.max_file_bytes + 1)
+        if len(raw) > self.max_file_bytes:
+            raise OSError(f"Contract file exceeds max_file_bytes: {path}")
+        return json.loads(raw.decode("utf-8"))
+
+    def _read_yaml_file(self, path: str, yaml: Any) -> object:
+        with open(path, "rb") as fh:
+            raw = fh.read(self.max_file_bytes + 1)
+        if len(raw) > self.max_file_bytes:
+            raise OSError(f"Contract file exceeds max_file_bytes: {path}")
+        return yaml.safe_load(raw.decode("utf-8"))
+
     @staticmethod
-    def _extract(payload: object) -> List[Dict]:
+    def _extract(payload: object) -> list[dict[str, Any]]:
         """Normalise a parsed payload into a list of contract mappings.
 
         Accepts either a single contract object (``{"id": ..., "schema": ...}``)

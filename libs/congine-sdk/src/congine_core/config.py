@@ -15,8 +15,20 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import FrozenSet, Optional
+from urllib.parse import urlparse
 
 from congine_core.exceptions import CongineConfigurationError
+from congine_core.security_limits import (
+    DEFAULT_MAX_CONTRACT_FILES,
+    DEFAULT_MAX_HTTP_RESPONSE_BYTES,
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_MAX_SCHEMA_BYTES,
+    DEFAULT_MAX_STREAM_BUFFER_CHARS,
+    DEFAULT_SEMANTIC_MAX_BREACHES,
+)
+
+# Exact loopback hostnames exempt from HTTPS/credential policy (FIX-01).
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 
 class Region(str, Enum):
@@ -38,40 +50,19 @@ class FailMode(str, Enum):
     SILENT = "silent"  # Ignore failures
 
 
+class DeploymentMode(str, Enum):
+    """Process deployment topology for container lifecycle policy."""
+
+    SINGLE_TENANT = "single_tenant"
+    MULTI_TENANT = "multi_tenant"
+
+
 @dataclass(frozen=True)
 class CongineConfig:
     """Congine SDK configuration.
 
     The dataclass is ``frozen=True``: once assembled at bootstrap the instance
-    is immutable and threaded read-only through every layer. Any attempt to
-    mutate a field after construction raises
-    :class:`dataclasses.FrozenInstanceError`.
-
-    Attributes
-    ----------
-    base_url:
-        Base URL of the Congine control plane.
-    api_key:
-        API key used to authenticate against the control plane.
-    project_id:
-        Identifier of the calling project.
-    tenant_id:
-        Identifier of the calling tenant (multi-tenant isolation).
-    region:
-        Deployment :class:`Region`.
-    validation_timeout_ms:
-        Hard wall-clock budget (milliseconds) for a single validation run.
-    fail_mode:
-        How the SDK behaves when validation fails (:class:`FailMode`).
-    cache_capacity:
-        Maximum number of schemas held in the local cache.
-    cache_ttl_seconds:
-        Default time-to-live, in seconds, for each cached schema.
-    sync_enabled:
-        When ``True``, :meth:`ServiceContainer.bootstrap` starts a background
-        worker that periodically re-syncs contracts. Off by default.
-    sync_interval_seconds:
-        Seconds between background contract syncs when ``sync_enabled``.
+    is immutable and threaded read-only through every layer.
     """
 
     # --- Control plane ---------------------------------------------------- #
@@ -82,10 +73,6 @@ class CongineConfig:
     region: Region
 
     # --- Validation ------------------------------------------------------- #
-    # 100ms accommodates CompositeValidator + jsonschema semantic validation on
-    # realistically-sized schemas without producing false-positive timeouts
-    # under STRICT mode (audit D-8). Pure rule-engine validation completes
-    # well under 1ms; the budget is a ceiling, not a target.
     validation_timeout_ms: int = 100
     fail_mode: FailMode = FailMode.DEGRADE
 
@@ -99,6 +86,8 @@ class CongineConfig:
 
     # --- Semantic validation & drift ------------------------------------- #
     semantic_validation_enabled: bool = False
+    semantic_max_breaches: int = DEFAULT_SEMANTIC_MAX_BREACHES
+    semantic_format_checking: bool = False
     drift_threshold: float = 0.1
     drift_sample_limit: int = 500
 
@@ -107,50 +96,37 @@ class CongineConfig:
     validation_max_pending: int = 10
 
     # --- Contract source (local-first / GitOps) -------------------------- #
-    # ``http`` (default) uses HttpContractRepository against the control plane;
-    # ``file`` uses FileContractRepository, reading contracts from contracts_dir.
     contract_source: str = "http"
     contracts_dir: Optional[str] = None
 
     # --- Snapshot / security / observability ----------------------------- #
     snapshot_dir: Optional[str] = None
-    # Secure default (audit D-6): the SDK ships credentials and telemetry. A
-    # non-local control plane MUST use HTTPS unless the deployer explicitly
-    # opts out via :attr:`allow_cleartext`. Loopback URLs are auto-exempt.
     require_https: bool = True
-    # Explicit cleartext opt-out for dev / internal use. When ``True`` the
-    # HTTPS requirement is waived for non-local URLs and a loud warning is
-    # emitted at container init so the choice is observable.
     allow_cleartext: bool = False
     log_level: str = "INFO"
-    # Optional structured-extra allowlist for the logger (PII safety, §5.3):
-    # when set, every kwarg key NOT in this set is replaced with "<redacted>"
-    # in emitted records. ``None`` (default) disables redaction.
     log_safe_fields: Optional[FrozenSet[str]] = None
+    log_redaction_enabled: bool = True
 
     # --- Circuit breaker (control-plane boundary protection) ------------- #
-    # Trips OPEN after this many consecutive control-plane failures so a hung
-    # or flapping plane cannot stall bootstrap or burn background-sync budget.
     breaker_failure_threshold: int = 5
-    # Seconds the breaker stays OPEN before allowing one HALF_OPEN probe.
     breaker_cooldown_seconds: float = 30.0
+
+    # --- Multi-tenant deployment (FIX-05) -------------------------------- #
+    deployment_mode: DeploymentMode = DeploymentMode.SINGLE_TENANT
+
+    # --- Input bounds (FIX-06) ------------------------------------------- #
+    max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
+    max_schema_bytes: int = DEFAULT_MAX_SCHEMA_BYTES
+    max_contract_files: int = DEFAULT_MAX_CONTRACT_FILES
+    max_stream_buffer_chars: int = DEFAULT_MAX_STREAM_BUFFER_CHARS
+    max_http_response_bytes: int = DEFAULT_MAX_HTTP_RESPONSE_BYTES
+
+    # --- Container lifecycle (FIX-14) ------------------------------------ #
+    start_background_services: bool = True
 
     @classmethod
     def from_env(cls) -> "CongineConfig":
-        """Load configuration from ``CONGINE_*`` environment variables.
-
-        Returns
-        -------
-        CongineConfig
-            A configuration instance populated from the environment, falling
-            back to sensible defaults where variables are unset.
-
-        Raises
-        ------
-        CongineConfigurationError
-            If an environment value cannot be parsed into its target type
-            (e.g. an unknown region/fail-mode, or a non-integer numeric).
-        """
+        """Load configuration from ``CONGINE_*`` environment variables."""
         try:
             region = Region(os.getenv("CONGINE_REGION", "us"))
         except ValueError as exc:
@@ -162,6 +138,15 @@ class CongineConfig:
         except ValueError as exc:
             raise CongineConfigurationError(
                 f"Invalid CONGINE_FAIL_MODE: {os.getenv('CONGINE_FAIL_MODE')!r}"
+            ) from exc
+        try:
+            deployment_mode = DeploymentMode(
+                os.getenv("CONGINE_DEPLOYMENT_MODE", "single_tenant")
+            )
+        except ValueError as exc:
+            raise CongineConfigurationError(
+                f"Invalid CONGINE_DEPLOYMENT_MODE: "
+                f"{os.getenv('CONGINE_DEPLOYMENT_MODE')!r}"
             ) from exc
 
         config = cls(
@@ -179,6 +164,12 @@ class CongineConfig:
             semantic_validation_enabled=cls._env_bool(
                 "CONGINE_SEMANTIC_VALIDATION", False
             ),
+            semantic_max_breaches=cls._env_int(
+                "CONGINE_SEMANTIC_MAX_BREACHES", DEFAULT_SEMANTIC_MAX_BREACHES
+            ),
+            semantic_format_checking=cls._env_bool(
+                "CONGINE_SEMANTIC_FORMAT_CHECKING", False
+            ),
             drift_threshold=cls._env_float("CONGINE_DRIFT_THRESHOLD", 0.1),
             drift_sample_limit=cls._env_int("CONGINE_DRIFT_SAMPLE_LIMIT", 500),
             validation_max_workers=cls._env_int("CONGINE_VALIDATION_WORKERS", 10),
@@ -190,23 +181,38 @@ class CongineConfig:
             allow_cleartext=cls._env_bool("CONGINE_ALLOW_CLEARTEXT", False),
             log_level=os.getenv("CONGINE_LOG_LEVEL", "INFO").upper(),
             log_safe_fields=cls._env_frozenset("CONGINE_LOG_SAFE_FIELDS"),
+            log_redaction_enabled=cls._env_bool("CONGINE_LOG_REDACTION", True),
             breaker_failure_threshold=cls._env_int(
                 "CONGINE_BREAKER_FAILURE_THRESHOLD", 5
             ),
             breaker_cooldown_seconds=cls._env_float(
                 "CONGINE_BREAKER_COOLDOWN_SECONDS", 30.0
             ),
+            deployment_mode=deployment_mode,
+            max_payload_bytes=cls._env_int(
+                "CONGINE_MAX_PAYLOAD_BYTES", DEFAULT_MAX_PAYLOAD_BYTES
+            ),
+            max_schema_bytes=cls._env_int(
+                "CONGINE_MAX_SCHEMA_BYTES", DEFAULT_MAX_SCHEMA_BYTES
+            ),
+            max_contract_files=cls._env_int(
+                "CONGINE_MAX_CONTRACT_FILES", DEFAULT_MAX_CONTRACT_FILES
+            ),
+            max_stream_buffer_chars=cls._env_int(
+                "CONGINE_MAX_STREAM_BUFFER_CHARS", DEFAULT_MAX_STREAM_BUFFER_CHARS
+            ),
+            max_http_response_bytes=cls._env_int(
+                "CONGINE_MAX_HTTP_RESPONSE_BYTES", DEFAULT_MAX_HTTP_RESPONSE_BYTES
+            ),
+            start_background_services=cls._env_bool(
+                "CONGINE_START_BACKGROUND_SERVICES", True
+            ),
         )
         config.validate()
         return config
 
     def validate(self) -> None:
-        """Validate completeness and security policy (audit H4).
-
-        For a non-local control plane, the tenant-isolation credentials must be
-        present, and (when ``require_https``) the URL must be HTTPS. Raises
-        :class:`CongineConfigurationError` on violation — no silent boot.
-        """
+        """Validate completeness and security policy (audit H4)."""
         if self.is_local_base_url():
             return
         missing = [
@@ -234,35 +240,52 @@ class CongineConfig:
             )
 
     def is_local_base_url(self) -> bool:
-        """Return ``True`` if the control plane is local (loopback)."""
-        url = (self.base_url or "").lower()
-        return (
-            "localhost" in url
-            or "127.0.0.1" in url
-            or "::1" in url
-            or url.startswith("http://0.0.0.0")
+        """Return ``True`` if the control plane host is an exact loopback match.
+
+        Uses parsed hostname (FIX-01) — substring false positives such as
+        ``notlocalhost`` or ``localhost.evil.com`` are rejected.
+        """
+        parsed = urlparse(self.base_url or "")
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
+            return False
+        return hostname in _LOCAL_HOSTS
+
+    def effective_log_safe_fields(self) -> Optional[FrozenSet[str]]:
+        """Return the log allowlist after applying non-local auto-redaction (FIX-08)."""
+        if self.log_safe_fields is not None:
+            return self.log_safe_fields
+        if not self.log_redaction_enabled or self.is_local_base_url():
+            return None
+        return frozenset(
+            {
+                "contract_id",
+                "contract_version",
+                "status",
+                "duration_ms",
+                "rule",
+                "field",
+                "error_type",
+                "breaches",
+                "count",
+                "attempt",
+                "timeout_ms",
+                "degraded",
+            }
         )
 
     @staticmethod
     def _env_bool(name: str, default: bool) -> bool:
-        """Parse a boolean environment variable *name*, defaulting if unset.
-
-        Truthy values (case-insensitive): ``1``, ``true``, ``yes``, ``on``.
-        """
         raw = os.getenv(name)
         if raw is None:
             return default
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
+        normalized = raw.strip().lower()
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return normalized in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _env_int(name: str, default: int) -> int:
-        """Parse integer environment variable *name*, defaulting if unset.
-
-        Raises
-        ------
-        CongineConfigurationError
-            If the variable is set but not a valid integer.
-        """
         raw = os.getenv(name)
         if raw is None:
             return default
@@ -275,7 +298,6 @@ class CongineConfig:
 
     @staticmethod
     def _env_frozenset(name: str) -> "Optional[FrozenSet[str]]":
-        """Parse a comma-separated string env var into a frozenset, or ``None`` if unset."""
         raw = os.getenv(name)
         if raw is None:
             return None
@@ -284,13 +306,6 @@ class CongineConfig:
 
     @staticmethod
     def _env_float(name: str, default: float) -> float:
-        """Parse a float environment variable *name*, defaulting if unset.
-
-        Raises
-        ------
-        CongineConfigurationError
-            If the variable is set but not a valid float.
-        """
         raw = os.getenv(name)
         if raw is None:
             return default
@@ -302,4 +317,4 @@ class CongineConfig:
             ) from exc
 
 
-__all__ = ["Region", "FailMode", "CongineConfig"]
+__all__ = ["Region", "FailMode", "DeploymentMode", "CongineConfig"]

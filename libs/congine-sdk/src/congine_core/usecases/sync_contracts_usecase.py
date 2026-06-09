@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
-from typing import TYPE_CHECKING, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
 
 from congine_core.exceptions import CongineSyncError
 from congine_core.ports.contract_repository import IContractRepository
@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover - portalocker is a declared core depende
     _PORTALOCKER_AVAILABLE = False
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.infrastructure.circuit_breaker import CircuitBreaker
+    from congine_core.ports.circuit_breaker import ICircuitBreaker
 
 
 class SyncContractsUseCase:
@@ -42,7 +42,7 @@ class SyncContractsUseCase:
         contract_repository: IContractRepository,
         logger: ILogger,
         cache_ttl_seconds: int = 300,
-        circuit_breaker: "Optional[CircuitBreaker]" = None,
+        circuit_breaker: "Optional[ICircuitBreaker]" = None,
         boot_lock_path: Optional[str] = None,
     ) -> None:
         """Constructor injection of all collaborators.
@@ -179,7 +179,7 @@ class SyncContractsUseCase:
             with contextlib.suppress(Exception):
                 lock.release()
 
-    def _fetch_sync(self) -> "tuple[Optional[List[Dict]], bool]":
+    def _fetch_sync(self) -> "tuple[Optional[list[dict[str, Any]]], bool]":
         if not self._breaker_allows():
             self.logger.warning(
                 "Circuit breaker OPEN; skipping contract fetch (snapshot fallback)"
@@ -194,7 +194,7 @@ class SyncContractsUseCase:
         self._breaker_record_success()
         return contracts, True
 
-    async def _fetch_async(self) -> "tuple[Optional[List[Dict]], bool]":
+    async def _fetch_async(self) -> "tuple[Optional[list[dict[str, Any]]], bool]":
         if not self._breaker_allows():
             self.logger.warning(
                 "Circuit breaker OPEN; skipping contract fetch (snapshot fallback)"
@@ -220,7 +220,7 @@ class SyncContractsUseCase:
         if self.circuit_breaker is not None:
             self.circuit_breaker.record_success()
 
-    def _apply(self, contracts: Optional[List[Dict]], fetched: bool) -> int:
+    def _apply(self, contracts: Optional[list[dict[str, Any]]], fetched: bool) -> int:
         if not contracts:
             self.logger.warning("No contracts available; retaining current cache")
             return 0
@@ -236,7 +236,7 @@ class SyncContractsUseCase:
         self.logger.info("Schema cache synced", count=loaded)
         return loaded
 
-    def _prime_cache(self, contracts: List[Dict]) -> int:
+    def _prime_cache(self, contracts: list[dict[str, Any]]) -> int:
         """Insert each contract's schema into the cache (each ``put`` atomic).
 
         Updates keys in place rather than clear-then-refill, so a concurrent

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
 from congine_core.domain import validator as validator_mod
 from congine_core.domain.validator import (
@@ -43,10 +42,6 @@ def test_compiled_pattern_is_cached() -> None:
     assert info.hits >= 1  # second use hit the compiled-pattern cache
 
 
-@pytest.mark.skipif(
-    not validator_mod._RE2_AVAILABLE,
-    reason="catastrophic-backtracking immunity requires the optional re2 backend",
-)
 def test_evil_pattern_is_bounded_with_re2() -> None:
     pattern = "(a+)+$"
     value = "a" * 60 + "X"  # explodes under backtracking engines

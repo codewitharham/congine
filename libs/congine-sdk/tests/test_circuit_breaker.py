@@ -126,6 +126,16 @@ def test_half_open_probe_failure_reopens_circuit() -> None:
     assert breaker.allow() is False
 
 
+def test_half_open_allows_only_single_probe() -> None:
+    breaker, clock = _breaker(threshold=1, cooldown=5.0)
+    breaker.record_failure()
+    clock.advance(5.0)
+    assert breaker.allow() is True
+    assert breaker.allow() is False
+    breaker.record_success()
+    assert breaker.allow() is True
+
+
 def test_state_property_triggers_half_open_transition() -> None:
     """Reading `state` is coherent with `allow` — it also advances the FSM."""
     breaker, clock = _breaker(threshold=1, cooldown=5.0)

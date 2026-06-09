@@ -90,6 +90,23 @@ Every field of `CongineConfig` is settable via `CONGINE_*` environment variables
 | `log_safe_fields`             | `CONGINE_LOG_SAFE_FIELDS`              | _none_      | Comma-separated allowlist for structured-extra logging keys (PII safety).                |
 | `breaker_failure_threshold`   | `CONGINE_BREAKER_FAILURE_THRESHOLD`    | `5`         | Consecutive failures before the circuit breaker trips OPEN.                              |
 | `breaker_cooldown_seconds`    | `CONGINE_BREAKER_COOLDOWN_SECONDS`     | `30.0`      | Seconds the breaker stays OPEN before allowing a HALF_OPEN probe.                        |
+| `deployment_mode`             | `CONGINE_DEPLOYMENT_MODE`              | `single_tenant` | `multi_tenant` disables `get_default()` — use explicit containers.                    |
+| `max_payload_bytes`           | `CONGINE_MAX_PAYLOAD_BYTES`            | `1048576`   | Max validation payload size (bytes).                                                     |
+| `semantic_format_checking`    | `CONGINE_SEMANTIC_FORMAT_CHECKING`     | `false`     | Enable jsonschema format assertions (off by default for safety).                         |
+| `start_background_services`   | `CONGINE_START_BACKGROUND_SERVICES`    | `true`      | Start telemetry/cache daemons at container init.                                         |
+
+---
+
+## Multi-tenant production pattern
+
+When one process serves multiple tenants, set `CONGINE_DEPLOYMENT_MODE=multi_tenant`.
+`ServiceContainer.get_default()` is **disabled** — each tenant needs its own container:
+
+```python
+container = ServiceContainer.for_tenant(tenant_id="t-a", project_id="proj-1")
+container.bootstrap()
+# Pass container= to @congine_guard and CongineCallbackHandler
+```
 
 ---
 
