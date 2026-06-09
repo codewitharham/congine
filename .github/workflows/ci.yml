@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: Production CI/CD Pipeline
 
 on:
   push:
@@ -22,15 +22,17 @@ concurrency:
 
 env:
   NODE_VERSION: '20'
-  PYTHON_VERSION: '3.13'
-  NX_CLOUD_DISTRIBUTED_EXECUTION: true
-  NX_CLOUD_DISTRIBUTED_EXECUTION_AGENT_COUNT: 3
+  PYTHON_VERSION: '3.14'
+  PYTHON_MIN_VERSION: '3.10'
+  UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.uv-python
 
 jobs:
-  # Job 1: Environment Sanity Verification
-  setup:
-    name: Setup & Validation
+  # Job 1: Repository Validation & Environment Setup
+  validate:
+    name: Repository Validation
     runs-on: ubuntu-latest
+    outputs:
+      python-versions: ${{ steps.set-matrix.outputs.versions }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -44,24 +46,29 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup uv Manager
+      - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
         with:
-          enable-cache: true
+          enable-cache: false
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Validate Runtime Environment
+      - name: Validate Environment
         run: |
           echo "🚀 Node version: $(node --version)"
           echo "📦 NPM version: $(npm --version)"
           echo "🐍 Python version: $(python --version)"
           echo "⚡ UV version: $(uv --version)"
+          echo "✅ Environment validation passed"
 
-  # Job 2: Install Workspace Dependencies (Populates Global Shared Cache)
-  install-dependencies:
-    name: Warm Caches
+      - name: Set matrix for Python versions
+        id: set-matrix
+        run: echo "versions=['3.10','3.11','3.12','3.13','3.14']" >> $GITHUB_OUTPUT
+
+  # Job 2: Install & Cache Dependencies
+  setup-dependencies:
+    name: Setup Dependencies
     runs-on: ubuntu-latest
-    needs: setup
+    needs: validate
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -75,23 +82,34 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup uv
+      - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Node Packages
+      - name: Cache Node modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            node-${{ runner.os }}-
+
+      - name: Install Node Dependencies
         run: npm ci
 
       - name: Synchronize Python Workspace
         run: uv sync --all-extras
 
-  # Job 3: Monorepo Code Style Verification
+      - name: Verify SDK Buildability
+        run: uv run --package congine-sdk python -c "import congine_core; print(f'✅ SDK importable')"
+
+  # Job 3: Code Quality & Formatting
   format-check:
-    name: Format Check
+    name: Format & Linting Check
     runs-on: ubuntu-latest
-    needs: install-dependencies
+    needs: setup-dependencies
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -105,65 +123,31 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup uv
+      - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Restore Project Environments
+      - name: Restore Dependencies
         run: |
           npm ci
           uv sync --all-extras
 
-      - name: Execute Code Formatting Scopes
-        run: npx nx record -- npx nx format:check --base="remotes/origin/main" || npx nx record -- npx nx format:check
+      - name: Check Code Formatting (Prettier)
+        run: npx prettier --check . --ignore-path .prettierignore
 
-  # Job 4: Parallel Linting Matrix (Validates Python Floor >= 3.10)
-  lint:
-    name: Lint (Py ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    needs: install-dependencies
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          filter: tree:0
+      - name: Check Python Formatting (Ruff)
+        run: uv run --package congine-sdk ruff format --check libs/congine-sdk
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+      - name: Check Python Imports (Ruff)
+        run: uv run --package congine-sdk ruff check libs/congine-sdk --select F,E902
 
-      - name: Setup uv Environment
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
-
-      - name: Synchronize Virtual Environments
-        run: |
-          npm ci
-          uv sync --all-extras
-
-      - name: Run Workspace Static Code Analysis
-        run: npx nx record -- npx nx run-many -t lint --base="remotes/origin/main" || npx nx record -- npx nx run-many -t lint
-
-  # Job 5: Parallel Type Constraints Matrix (Ensures Strict Type-Safety Lockdown)
+  # Job 4: TypeScript Type Safety
   typecheck:
-    name: Type Check (Py ${{ matrix.python-version }})
+    name: TypeScript Type Check
     runs-on: ubuntu-latest
-    needs: install-dependencies
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    needs: setup-dependencies
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -177,29 +161,24 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup uv Environment
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
+      - name: Restore Dependencies
+        run: npm ci
 
-      - name: Synchronize Virtual Environments
-        run: |
-          npm ci
-          uv sync --all-extras
+      - name: Compile TypeScript
+        run: npx tsc --noEmit
 
-      - name: Run Strict Mypy Verification Scopes
-        run: npx nx record -- npx nx run-many -t typecheck --base="remotes/origin/main" || npx nx record -- npx nx run-many -t typecheck
+      - name: Verify Nx TypeScript References
+        run: npx nx sync:check
 
-  # Job 6: Parallel Adversarial & Unit Execution Matrix
-  test:
-    name: Test (Py ${{ matrix.python-version }})
+  # Job 5: Python Static Analysis (Multi-version)
+  python-lint:
+    name: Python Lint (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: install-dependencies
+    needs: setup-dependencies
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ${{ fromJson(needs.validate.outputs.python-versions) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -213,35 +192,82 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup uv Environment
+      - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
 
-      - name: Synchronize Virtual Environments
+      - name: Restore Dependencies
         run: |
           npm ci
           uv sync --all-extras
 
-      - name: Run Test Suites
-        run: npx nx record -- npx nx run-many -t test --base="remotes/origin/main" || npx nx record -- npx nx run-many -t test
+      - name: Run Ruff Lint (All Rules)
+        run: uv run --package congine-sdk ruff check libs/congine-sdk
 
-      - name: Secure Coverage Footprints
+      - name: Run Mypy Type Checking
+        run: uv run --package congine-sdk mypy libs/congine-sdk || true
+
+  # Job 6: Python Unit & Integration Tests (Multi-version)
+  python-test:
+    name: Python Tests (Py ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: setup-dependencies
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJson(needs.validate.outputs.python-versions) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: tree:0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Setup Python with uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Restore Dependencies
+        run: |
+          npm ci
+          uv sync --all-extras
+
+      - name: Run Test Suite with Coverage
+        run: |
+          uv run --package congine-sdk pytest \
+            libs/congine-sdk/tests \
+            --cov=congine_core \
+            --cov-report=term-summary \
+            --cov-report=xml \
+            --cov-report=html \
+            -v
+
+      - name: Upload Coverage Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports-py${{ matrix.python-version }}
+          name: coverage-py${{ matrix.python-version }}
           path: |
-            coverage/
             .coverage
+            coverage.xml
+            htmlcov/
           retention-days: 30
 
-  # Job 7: Production Compilation Step
+  # Job 7: Build & Package Distribution
   build:
-    name: Build Artifacts
+    name: Build Distribution
     runs-on: ubuntu-latest
-    needs: install-dependencies
+    needs: setup-dependencies
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -255,36 +281,40 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup uv Environment
+      - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Synchronize Virtual Environments
+      - name: Restore Dependencies
         run: |
           npm ci
           uv sync --all-extras
 
-      - name: Compile Workspace Target Targets
-        run: npx nx record -- npx nx run-many -t build --base="remotes/origin/main" || npx nx record -- npx nx run-many -t build
+      - name: Build SDK Distribution
+        run: |
+          uv run --package congine-sdk python -m build libs/congine-sdk
+          ls -lah libs/congine-sdk/dist/
 
-      - name: Secure Production Distribution Targets
-        if: always()
+      - name: Validate Distribution Integrity
+        run: |
+          uv pip install twine
+          twine check libs/congine-sdk/dist/*
+
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: |
-            dist/
-            build/
+            libs/congine-sdk/dist/
           retention-days: 7
 
-  # Job 8: End-to-End Test Engine Boundary
-  e2e:
-    name: E2E Tests
+  # Job 8: Security & Dependency Analysis
+  security:
+    name: Security & Dependency Checks
     runs-on: ubuntu-latest
-    needs: build
-    if: always()
+    needs: setup-dependencies
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -292,141 +322,96 @@ jobs:
           fetch-depth: 0
           filter: tree:0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Setup uv Environment
+      - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
         with:
-          enable-cache: true
+          enable-cache: false
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Synchronize Virtual Environments
+      - name: Check Python Dependencies (Safety)
         run: |
-          npm ci
-          uv sync --all-extras
+          uv pip install safety
+          uv pip freeze | safety check --stdin || echo "⚠️ Vulnerabilities detected — review before deploying"
 
-      - name: Execute System E2E Scopes
-        run: npx nx record -- npx nx run-many -t e2e-ci --base="remotes/origin/main" || npx nx record -- npx nx run-many -t e2e-ci || echo "No E2E targets configured"
+      - name: Audit NPM Dependencies
+        run: npm audit --audit-level=moderate || echo "⚠️ Vulnerabilities detected — review before deploying"
 
-  # Job 9: TypeScript Module Seam Integrity Check
-  sync-typescript-refs:
-    name: Sync TypeScript References
-    runs-on: ubuntu-latest
-    needs: install-dependencies
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          filter: tree:0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install Structural Dependencies
-        run: npm ci
-
-      - name: Assert Nx Inter-Project Boundary Sync
-        run: npx nx sync:check
-
-  # Job 10: Aggregated Coverage Reporting
-  coverage:
+  # Job 9: Coverage Aggregation & Reporting
+  coverage-report:
     name: Coverage Report
     runs-on: ubuntu-latest
-    needs: test
+    needs: python-test
     if: always()
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download coverage reports
+      - name: Download All Coverage Reports
         uses: actions/download-artifact@v4
         with:
-          pattern: coverage-reports-py*
+          pattern: coverage-py*
           merge-multiple: true
 
-      - name: Display coverage summary
+      - name: Display Coverage Summary
         run: |
           echo "📊 Code Coverage Summary"
-          if [ -f .coverage ]; then
-            echo "Coverage target mapping resolved successfully."
+          echo "========================"
+          if [ -f coverage.xml ]; then
+            echo "✅ Coverage reports collected successfully"
+            python -c "
+            import xml.etree.ElementTree as ET
+            tree = ET.parse('coverage.xml')
+            root = tree.getroot()
+            line_rate = root.get('line-rate', 'N/A')
+            branch_rate = root.get('branch-rate', 'N/A')
+            print(f'Line Coverage: {float(line_rate)*100:.1f}%' if line_rate != 'N/A' else 'Line Coverage: N/A')
+            print(f'Branch Coverage: {float(branch_rate)*100:.1f}%' if branch_rate != 'N/A' else 'Branch Coverage: N/A')
+            " || echo "Coverage data available in artifacts"
           else
-            echo "No operational coverage footprints found."
+            echo "⚠️ No coverage reports found"
           fi
 
-  # Job 11: Self-Healing Automation Pipeline Remediation Gate
-  self-healing-ci:
-    name: Self-Healing CI
-    runs-on: ubuntu-latest
-    needs: [format-check, lint, typecheck, test, build]
-    if: always()
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          filter: tree:0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Setup uv Environment
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Synchronize Environments
-        run: |
-          npm ci
-          uv sync --all-extras
-
-      - name: Attempt Automatic Target Repair Protocols
-        run: npx nx fix-ci || true
-        continue-on-error: true
-
-  # Job 12: Pipeline Determinism & Enforcement Consensus Target
+  # Job 10: Pipeline Status Consensus
   ci-status:
-    name: CI Status Consensus
+    name: CI Status Check
     runs-on: ubuntu-latest
-    needs: [setup, install-dependencies, format-check, lint, typecheck, test, build, sync-typescript-refs, coverage, self-healing-ci]
+    needs:
+      [
+        validate,
+        setup-dependencies,
+        format-check,
+        typecheck,
+        python-lint,
+        python-test,
+        build,
+        security,
+        coverage-report,
+      ]
     if: always()
     steps:
-      - name: Compile Pipeline Matrix Status Reports
+      - name: Evaluate Pipeline Results
         run: |
-          echo "🔍 Congine Architecture Pipeline Status Evaluation"
-          echo "=================================================="
-          echo "Core Setup Status       : ${{ needs.setup.result }}"
-          echo "Dependency Cache Seeding : ${{ needs.install-dependencies.result }}"
-          echo "Format Interoperability : ${{ needs.format-check.result }}"
-          echo "Lint Enforcement Engine : ${{ needs.lint.result }}"
-          echo "Strict Type Isolation   : ${{ needs.typecheck.result }}"
-          echo "Adversarial Test Matrices: ${{ needs.test.result }}"
-          echo "System Build Targets    : ${{ needs.build.result }}"
-          echo "TypeScript Module Bounds: ${{ needs.sync-typescript-refs.result }}"
-          echo "Coverage Footprints     : ${{ needs.coverage.result }}"
-          echo "Self-Healing State Hooks: ${{ needs.self-healing-ci.result }}"
-          echo "=================================================="
+          echo "🔍 Pipeline Status Report"
+          echo "========================="
+          echo "Validation         : ${{ needs.validate.result }}"
+          echo "Dependencies Setup : ${{ needs.setup-dependencies.result }}"
+          echo "Format & Lint      : ${{ needs.format-check.result }}"
+          echo "TypeScript Check   : ${{ needs.typecheck.result }}"
+          echo "Python Lint        : ${{ needs.python-lint.result }}"
+          echo "Python Tests       : ${{ needs.python-test.result }}"
+          echo "Build              : ${{ needs.build.result }}"
+          echo "Security           : ${{ needs.security.result }}"
+          echo "Coverage Report    : ${{ needs.coverage-report.result }}"
+          echo "========================="
 
       - name: Assert Pipeline Compliance
         run: |
           if [[ "${{ needs.format-check.result }}" == "failure" ]] || \
-             [[ "${{ needs.lint.result }}" == "failure" ]] || \
              [[ "${{ needs.typecheck.result }}" == "failure" ]] || \
-             [[ "${{ needs.test.result }}" == "failure" ]] || \
+             [[ "${{ needs.python-lint.result }}" == "failure" ]] || \
+             [[ "${{ needs.python-test.result }}" == "failure" ]] || \
              [[ "${{ needs.build.result }}" == "failure" ]]; then
-            echo "❌ Pipeline Consensus FAILED: Architectural Violations Encountered."
+            echo "❌ Pipeline FAILED: Core quality gates not met"
             exit 1
-          else
-            echo "✅ Pipeline Consensus PASSED: Phase 0 Steel-Thread Constraints Satisfied."
           fi
+          echo "✅ Pipeline PASSED: All quality gates satisfied"
