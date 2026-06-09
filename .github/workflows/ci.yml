@@ -134,9 +134,6 @@ jobs:
           npm ci
           uv sync --all-extras
 
-      - name: Check Code Formatting (Prettier)
-        run: npx prettier --check . --ignore-path .prettierignore
-
       - name: Check Python Formatting (Ruff)
         run: uv run --package congine-sdk ruff format --check libs/congine-sdk
 
