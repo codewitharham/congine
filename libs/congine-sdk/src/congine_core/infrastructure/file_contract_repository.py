@@ -30,15 +30,25 @@ from congine_core.ports.logger import ILogger
 class FileContractRepository:
     """Read contracts from a local directory; no network or snapshot persistence."""
 
-    def __init__(self, contracts_dir: str, logger: Optional[ILogger] = None) -> None:
+    def __init__(
+        self,
+        contracts_dir: str,
+        logger: Optional[ILogger] = None,
+        max_contract_files: int = 1000,
+        max_file_bytes: int = 1_048_576,
+    ) -> None:
         """Args:
         contracts_dir: Path to a directory containing ``*.json`` (and optionally
             ``*.yaml``/``*.yml``) contract files. Each file must contain either
             a single contract object or a ``contracts`` envelope.
         logger: Optional :class:`ILogger` for warnings on malformed files.
+        max_contract_files: Stop scanning after this many files (FIX-06).
+        max_file_bytes: Maximum bytes read per contract file.
         """
         self.contracts_dir = contracts_dir
         self.logger = logger
+        self.max_contract_files = max_contract_files
+        self.max_file_bytes = max_file_bytes
 
     async def fetch_active_contracts(self) -> List[Dict]:
         """Return every well-formed contract found under :attr:`contracts_dir`.
@@ -58,17 +68,16 @@ class FileContractRepository:
         contracts: List[Dict] = []
         json_files = sorted(
             glob.glob(os.path.join(self.contracts_dir, "**", "*.json"), recursive=True)
-        )
+        )[: self.max_contract_files]
         for path in json_files:
             try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    payload = json.load(fh)
+                payload = self._read_json_file(path)
             except (OSError, json.JSONDecodeError) as exc:
                 if self.logger is not None:
                     self.logger.warning(
                         "Skipping malformed contract file",
                         path=path,
-                        error=str(exc),
+                        error_type=type(exc).__name__,
                     )
                 continue
             contracts.extend(self._extract(payload))
@@ -88,17 +97,16 @@ class FileContractRepository:
                     os.path.join(self.contracts_dir, "**", "*.yaml"),
                     recursive=True,
                 )
-            )
+            )[: max(0, self.max_contract_files - len(json_files))]
             for path in yaml_files:
                 try:
-                    with open(path, "r", encoding="utf-8") as fh:
-                        payload = yaml.safe_load(fh)
+                    payload = self._read_yaml_file(path, yaml)
                 except (OSError, yaml.YAMLError) as exc:  # type: ignore[attr-defined]
                     if self.logger is not None:
                         self.logger.warning(
                             "Skipping malformed contract file",
                             path=path,
-                            error=str(exc),
+                            error_type=type(exc).__name__,
                         )
                     continue
                 contracts.extend(self._extract(payload))
@@ -122,6 +130,20 @@ class FileContractRepository:
                 "save_snapshot is a no-op for FileContractRepository",
                 count=len(contracts),
             )
+
+    def _read_json_file(self, path: str) -> object:
+        with open(path, "rb") as fh:
+            raw = fh.read(self.max_file_bytes + 1)
+        if len(raw) > self.max_file_bytes:
+            raise OSError(f"Contract file exceeds max_file_bytes: {path}")
+        return json.loads(raw.decode("utf-8"))
+
+    def _read_yaml_file(self, path: str, yaml: object) -> object:
+        with open(path, "rb") as fh:
+            raw = fh.read(self.max_file_bytes + 1)
+        if len(raw) > self.max_file_bytes:
+            raise OSError(f"Contract file exceeds max_file_bytes: {path}")
+        return yaml.safe_load(raw.decode("utf-8"))  # type: ignore[union-attr]
 
     @staticmethod
     def _extract(payload: object) -> List[Dict]:

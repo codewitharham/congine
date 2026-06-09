@@ -1,10 +1,4 @@
-"""Dependency-injection container (Layer 5).
-
-:class:`ServiceContainer` is the composition root. It instantiates every layer
-bottom-up — infrastructure, then domain, then use cases — wiring concrete
-implementations into the abstractions each upper layer depends on. No globals
-are used; all dependencies flow through constructors.
-"""
+"""Dependency-injection container (Layer 5)."""
 
 from __future__ import annotations
 
@@ -12,7 +6,7 @@ import asyncio
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
 
-from congine_core.config import CongineConfig
+from congine_core.config import CongineConfig, DeploymentMode
 from congine_core.domain.models import TelemetryEvent
 from congine_core.exceptions import CongineConfigurationError
 from congine_core.domain.validator import CompositeValidator, LocalValidator
@@ -38,62 +32,88 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 class ServiceContainer:
     """Assemble and own the full Congine object graph."""
 
-    # Process-wide shared default (C1): one container — and therefore one cache,
-    # one telemetry worker, one validation pool — backs every guard that is not
-    # given an explicit container. Guarded against the per-decoration spawn that
-    # would otherwise leak threads and never prime its cache.
     _default_instance: ClassVar[Optional["ServiceContainer"]] = None
     _default_lock: ClassVar[threading.Lock] = threading.Lock()
+    _tenant_registry: ClassVar[Dict[str, "ServiceContainer"]] = {}
+    _tenant_lock: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
     def get_default(cls) -> "ServiceContainer":
         """Return the lazily-initialised, process-wide shared container.
 
-        Thread-safe via double-checked locking. Built from
-        :meth:`CongineConfig.from_env`, which raises
-        :class:`CongineConfigurationError` on incomplete configuration — there is
-        no silent boot.
-
-        Returns:
-            The singleton :class:`ServiceContainer` shared by all default guards.
+        Raises :class:`CongineConfigurationError` in ``multi_tenant`` deployment
+        mode — callers must pass an explicit ``container=`` or use
+        :meth:`for_tenant` (FIX-05).
         """
+        config = CongineConfig.from_env()
+        if config.deployment_mode is DeploymentMode.MULTI_TENANT:
+            raise CongineConfigurationError(
+                "ServiceContainer.get_default() is disabled in multi_tenant mode. "
+                "Pass container= explicitly per tenant, or use "
+                "ServiceContainer.for_tenant(tenant_id, project_id)."
+            )
         if cls._default_instance is None:
             with cls._default_lock:
                 if cls._default_instance is None:
-                    cls._default_instance = cls.from_env()
+                    cls._default_instance = cls(config)
         return cls._default_instance
 
     @classmethod
-    def reset_default(cls) -> None:
-        """Tear down and clear the shared default container (idempotent).
+    def for_tenant(
+        cls,
+        tenant_id: str,
+        project_id: str,
+        *,
+        config: Optional[CongineConfig] = None,
+        **config_overrides: Any,
+    ) -> "ServiceContainer":
+        """Return a registry-backed container scoped to *tenant_id* / *project_id*."""
+        key = f"{tenant_id}|{project_id}"
+        with cls._tenant_lock:
+            existing = cls._tenant_registry.get(key)
+            if existing is not None:
+                return existing
+            if config is None:
+                base = CongineConfig.from_env()
+                overrides = dict(config_overrides)
+                overrides.setdefault("tenant_id", tenant_id)
+                overrides.setdefault("project_id", project_id)
+                overrides["deployment_mode"] = DeploymentMode.MULTI_TENANT
+                from dataclasses import fields, replace
 
-        Primarily for tests and graceful process shutdown; closes background
-        resources before dropping the reference.
-        """
+                valid = {f.name for f in fields(CongineConfig)}
+                filtered = {k: v for k, v in overrides.items() if k in valid}
+                config = replace(base, **filtered)
+            else:
+                if config.tenant_id != tenant_id or config.project_id != project_id:
+                    raise CongineConfigurationError(
+                        "for_tenant config tenant_id/project_id must match arguments"
+                    )
+            container = cls(config)
+            cls._tenant_registry[key] = container
+            return container
+
+    @classmethod
+    def reset_default(cls) -> None:
+        """Tear down and clear the shared default container (idempotent)."""
         with cls._default_lock:
             if cls._default_instance is not None:
                 cls._default_instance.close()
                 cls._default_instance = None
+        with cls._tenant_lock:
+            for container in cls._tenant_registry.values():
+                container.close()
+            cls._tenant_registry.clear()
 
     def __init__(self, config: CongineConfig) -> None:
-        """Wire all layers top-to-bottom from *config*.
-
-        Args:
-            config: The validated runtime configuration.
-        """
         self.config = config
+        start_bg = config.start_background_services
 
-        # --- Layer 4: Infrastructure (concrete implementations) --------- #
         self.logger = StructuredLogger(
             "congine",
             level=config.log_level,
-            log_safe_fields=config.log_safe_fields,
+            log_safe_fields=config.effective_log_safe_fields(),
         )
-        # Security posture warning (audit D-6): cleartext control plane leaks
-        # the API key + telemetry. Default policy now *enforces* HTTPS at
-        # config-validate time, so this branch fires only when the deployer
-        # explicitly opted out (allow_cleartext=True) — a loud audit trail of
-        # the conscious choice.
         if not config.is_local_base_url() and not config.base_url.lower().startswith(
             "https://"
         ):
@@ -102,30 +122,26 @@ class ServiceContainer:
                 "API key and telemetry are sent in cleartext",
                 base_url=config.base_url,
             )
-        # Bounded, load-shedding pool (H1) — also the off-loop executor for the
-        # async guard (H2). Exposes run_with_timeout (ValidationTimer-compatible).
         self.validation_executor = BoundedValidationExecutor(
             max_workers=config.validation_max_workers,
             max_pending=config.validation_max_pending,
+            register_atexit=start_bg,
         )
         self.schema_storage = LFUCache(
             capacity=config.cache_capacity,
             ttl_seconds=config.cache_ttl_seconds,
+            start_sweeper=start_bg,
         )
-        # Control-plane circuit breaker (H4) — wrapped around both the contract
-        # fetch (sync use case) and telemetry ship (event bus). Process-local
-        # in-memory state; a distributed breaker is Phase 2+.
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=config.breaker_failure_threshold,
             cooldown_seconds=config.breaker_cooldown_seconds,
         )
-        # Contract source: ``file`` enables the local-first / GitOps path
-        # (reads JSON/YAML from ``contracts_dir``). Anything else (the default
-        # ``http``) wires the network-backed repository.
         if config.contract_source == "file" and config.contracts_dir is not None:
             self.contract_repository = FileContractRepository(
                 contracts_dir=config.contracts_dir,
                 logger=self.logger,
+                max_contract_files=config.max_contract_files,
+                max_file_bytes=config.max_schema_bytes,
             )
         else:
             self.contract_repository = HttpContractRepository(config, self.logger)
@@ -133,17 +149,18 @@ class ServiceContainer:
             config=config,
             logger=self.logger,
             circuit_breaker=self.circuit_breaker,
+            start_worker=start_bg,
         )
-        self.semantic_validator = JsonSchemaSemanticValidator()
+        self.semantic_validator = JsonSchemaSemanticValidator(
+            max_breaches=config.semantic_max_breaches,
+            format_checking=config.semantic_format_checking,
+        )
         self.drift_engine = KSDriftEngine(
             threshold=config.drift_threshold,
             max_samples=config.drift_sample_limit,
         )
 
-        # --- Layer 2: Domain (pure business logic) ---------------------- #
-        # Rule-engine validation by default; when semantic validation is
-        # enabled, compose it with the jsonschema validator via Constructor DI.
-        rule_validator = LocalValidator()  # default six rules
+        rule_validator = LocalValidator()
         if config.semantic_validation_enabled:
             self.validator = CompositeValidator(
                 rule_validator=rule_validator,
@@ -152,7 +169,6 @@ class ServiceContainer:
         else:
             self.validator = rule_validator
 
-        # --- Layer 3: Use cases (orchestration) ------------------------- #
         self.validate_contract_usecase = ValidateContractUseCase(
             schema_storage=self.schema_storage,
             validator=self.validator,
@@ -161,10 +177,9 @@ class ServiceContainer:
             timer=self.validation_executor,
             timeout_ms=config.validation_timeout_ms,
             fail_mode=config.fail_mode,
+            max_payload_bytes=config.max_payload_bytes,
+            max_schema_bytes=config.max_schema_bytes,
         )
-        # `snapshot_lock_path` is exposed by HttpContractRepository for boot
-        # single-flight (D-7); other repositories (e.g. FileContractRepository)
-        # do not need coordination, so the use case degrades gracefully.
         boot_lock_path = getattr(self.contract_repository, "snapshot_lock_path", None)
         self.sync_contracts_usecase = SyncContractsUseCase(
             schema_storage=self.schema_storage,
@@ -175,7 +190,6 @@ class ServiceContainer:
             boot_lock_path=boot_lock_path,
         )
 
-        # --- Background sync worker (started on demand) ----------------- #
         self.sync_worker = BackgroundSyncWorker(
             self.sync_contracts_usecase,
             interval_seconds=config.sync_interval_seconds,
@@ -188,33 +202,16 @@ class ServiceContainer:
     def from_env(cls) -> "ServiceContainer":
         """Build a container from environment-derived configuration.
 
-        The container is assembled side-effect-free: it does NOT touch the
-        network. Call :meth:`bootstrap` explicitly to prime the schema cache.
-
-        Returns:
-            A fully wired :class:`ServiceContainer`.
+        Does not touch the network. Background daemons (telemetry drain, cache
+        sweeper) start when ``start_background_services`` is True (FIX-14).
         """
         return cls(CongineConfig.from_env())
 
     def bootstrap(self) -> int:
-        """Prime the schema cache from the control plane, offline-safe.
-
-        Delegates to :meth:`SyncContractsUseCase.sync_once` (online fetch →
-        snapshot fallback → cache prime → snapshot persist). When
-        ``config.sync_enabled`` is set, also starts the periodic background sync
-        worker so the cache is kept fresh.
-
-        Must be called from a synchronous context; from inside a running event
-        loop use :meth:`bootstrap_async` instead (this raises a clear error
-        rather than the opaque ``asyncio.run`` failure).
-
-        Returns:
-            The number of contracts loaded into the cache by the initial sync.
-        """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            pass  # no running loop — safe to drive asyncio.run
+            pass
         else:
             raise RuntimeError(
                 "bootstrap() cannot run inside an event loop; await bootstrap_async()"
@@ -225,42 +222,18 @@ class ServiceContainer:
         return loaded
 
     async def bootstrap_async(self) -> int:
-        """Async-safe cache priming for callers already inside an event loop.
-
-        Returns:
-            The number of contracts loaded into the cache by the initial sync.
-        """
         loaded = await self.sync_contracts_usecase.sync_once_single_flight_async()
         if self.config.sync_enabled:
             self.start_background_sync()
         return loaded
 
     def start_background_sync(self) -> None:
-        """Start the periodic background contract-sync worker (idempotent)."""
         self.sync_worker.start()
 
-    # ------------------------------------------------------------------ #
-    # Drift detection (M1 — wires the KS engine to telemetry)
-    # ------------------------------------------------------------------ #
     def record_drift_sample(self, value: float) -> None:
-        """Add one observation to the drift engine's reference window."""
         self.drift_engine.add_reference(value)
 
     def evaluate_drift(self, current_samples: Sequence[float]) -> "DriftResult":
-        """Run a drift check; on detected drift, log + publish telemetry.
-
-        Args:
-            current_samples: The current window to compare against the reference.
-
-        Returns:
-            The :class:`DriftResult`. Requires the optional ``numpy`` extension
-            (``congine-sdk[stats]``); see :meth:`KSDriftEngine.detect`.
-
-        Raises:
-            CongineConfigurationError: If the ``[stats]`` extra is not
-                installed (audit D-10) — converted from the underlying
-                :class:`ImportError` so callers see a single exception family.
-        """
         try:
             result = self.drift_engine.detect(current_samples)
         except ImportError as exc:
@@ -293,9 +266,6 @@ class ServiceContainer:
         return result
 
     def health(self) -> Dict[str, Any]:
-        """Return a lightweight operational snapshot (L2 — observability)."""
-        # `dropped_total` is exposed only when the event bus implements it
-        # (the default :class:`QueueEventBus` does; test fakes may not).
         dropped_total = getattr(self.event_bus, "dropped_total", None)
         return {
             "cache_entries": self.schema_storage.size(),
@@ -311,20 +281,13 @@ class ServiceContainer:
         }
 
     def close(self) -> None:
-        """Release background resources (sync worker, cache sweeper, bus, timer).
-
-        Idempotent. Use for clean teardown of per-tenant containers; the event
-        bus is flushed before its worker stops so buffered telemetry is shipped.
-        """
         self.sync_worker.stop()
         self.schema_storage.stop()
         self.event_bus.stop(drain=True)
         self.validation_executor.shutdown(wait=False)
 
     def __enter__(self) -> "ServiceContainer":
-        """Support ``with ServiceContainer(...) as c:`` usage."""
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        """Release resources on context-manager exit."""
         self.close()

@@ -9,8 +9,9 @@ inheritance) into an :class:`IValidator`.
 from __future__ import annotations
 
 import functools
-import re
 import time
+
+import re2 as _re2
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -24,31 +25,23 @@ from typing import (
 )
 
 from congine_core.domain.models import BreachDetail, ValidationResult
+from congine_core.security_limits import MAX_PATTERN_LENGTH, MAX_REGEX_VALUE_LENGTH
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.ports.semantic_validator import ISemanticValidator
 
-# --- ReDoS guard (audit H3) ------------------------------------------------- #
-#: Reject schema-supplied patterns longer than this (untrusted-input budget).
-_MAX_PATTERN_LENGTH = 1000
-#: Fail-closed: do not run a backtracking regex against values longer than this.
-_MAX_REGEX_VALUE_LENGTH = 50_000
+# Backward-compatible aliases for tests and external references.
+_MAX_PATTERN_LENGTH = MAX_PATTERN_LENGTH
+_MAX_REGEX_VALUE_LENGTH = MAX_REGEX_VALUE_LENGTH
 
-try:  # Optional linear-time engine; immune to catastrophic backtracking.
-    import re2 as _re2  # type: ignore[import-not-found]
-
-    _RE2_AVAILABLE = True
-except ImportError:  # pragma: no cover - re2 is an optional, undeclared backend
-    _re2 = None
-    _RE2_AVAILABLE = False
+# google-re2 is a required core dependency (FIX-02) — linear-time matching.
+_RE2_AVAILABLE = True
 
 
 @functools.lru_cache(maxsize=512)
 def _compiled_pattern(pattern: str):
-    """Compile and cache *pattern* (re2 when available, else stdlib ``re``)."""
-    if _RE2_AVAILABLE:
-        return _re2.compile(pattern)
-    return re.compile(pattern)
+    """Compile and cache *pattern* using RE2 (linear-time, no catastrophic backtracking)."""
+    return _re2.compile(pattern)
 
 
 #: Mapping from JSON-schema type names to acceptable Python types. ``bool`` is
@@ -264,7 +257,7 @@ class RuleEngine:
                 continue
             try:
                 matched = _compiled_pattern(pattern).fullmatch(value) is not None
-            except re.error:
+            except _re2.error:
                 breaches.append(
                     BreachDetail(
                         rule="REGEX_PATTERN",

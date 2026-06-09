@@ -37,12 +37,15 @@ class ValidationResult:
         duration_ms: Wall-clock validation time in milliseconds.
         degraded: ``True`` when the result is a timeout/error fallback rather
             than a genuine evaluation.
+        degraded_reason: Optional machine-readable tag when ``degraded`` is
+            ``True`` (e.g. ``"timeout"``, ``"internal_error"``).
     """
 
     status: str
     breaches: Tuple[BreachDetail, ...] = ()
     duration_ms: float = 0.0
     degraded: bool = False
+    degraded_reason: Optional[str] = None
 
     def is_pass(self) -> bool:
         """Return ``True`` if validation passed."""

@@ -87,6 +87,11 @@ class BackgroundSyncWorker:
         """Run one sync pass, swallowing errors so the loop never dies."""
         try:
             self._sync_usecase.sync_once()
-        except Exception as exc:  # noqa: BLE001 - loop must survive any failure
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:  # noqa: BLE001 - loop must survive transport defects
             if self._logger is not None:
-                self._logger.error("Background sync pass failed", error=str(exc))
+                self._logger.error(
+                    "Background sync pass failed",
+                    error_type=type(exc).__name__,
+                )

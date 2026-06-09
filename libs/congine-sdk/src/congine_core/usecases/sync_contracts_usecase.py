@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover - portalocker is a declared core depende
     _PORTALOCKER_AVAILABLE = False
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.infrastructure.circuit_breaker import CircuitBreaker
+    from congine_core.ports.circuit_breaker import ICircuitBreaker
 
 
 class SyncContractsUseCase:
@@ -42,7 +42,7 @@ class SyncContractsUseCase:
         contract_repository: IContractRepository,
         logger: ILogger,
         cache_ttl_seconds: int = 300,
-        circuit_breaker: "Optional[CircuitBreaker]" = None,
+        circuit_breaker: "Optional[ICircuitBreaker]" = None,
         boot_lock_path: Optional[str] = None,
     ) -> None:
         """Constructor injection of all collaborators.

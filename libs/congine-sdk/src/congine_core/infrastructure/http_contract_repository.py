@@ -114,15 +114,26 @@ class HttpContractRepository:
         }
         url = f"{self.config.base_url}/api/v1/contracts/active"
 
+        max_bytes = self.config.max_http_response_bytes
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            limits = httpx.Limits(max_response=max_bytes)
+            async with httpx.AsyncClient(timeout=10.0, limits=limits) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
+                if len(response.content) > max_bytes:
+                    raise CongineSyncError(
+                        f"Control plane response exceeds max_http_response_bytes "
+                        f"({max_bytes})"
+                    )
                 data = response.json()
             return data["contracts"]
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
+        except (httpx.HTTPError, KeyError, ValueError, CongineSyncError) as exc:
             if self.logger is not None:
-                self.logger.error("Contract fetch failed", url=url, error=str(exc))
+                self.logger.error(
+                    "Contract fetch failed",
+                    url=url,
+                    error_type=type(exc).__name__,
+                )
             raise CongineSyncError(
                 f"Failed to fetch active contracts from {url}"
             ) from exc

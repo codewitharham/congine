@@ -7,8 +7,7 @@ boot up to 10s per attempt (the ``httpx`` client timeout) — long enough to
 trip Kubernetes liveness/readiness gates — and a persistently dead plane burns
 the full backoff window on every background sync pass.
 
-The breaker is **not a dependency-inverted seam**: it wraps existing adapters
-rather than abstracting them, so it lives at L4 without a matching L1 port.
+Implements :class:`congine_core.ports.circuit_breaker.ICircuitBreaker`.
 
 State machine::
 
@@ -61,6 +60,7 @@ class CircuitBreaker:
         self._state = _CLOSED
         self._consecutive_failures = 0
         self._opened_at: float = 0.0
+        self._probe_in_flight = False
 
     @property
     def state(self) -> str:
@@ -80,12 +80,20 @@ class CircuitBreaker:
         - ``CLOSED``      → always ``True``.
         - ``OPEN``        → ``True`` once the cooldown has elapsed (transitions
           to HALF_OPEN); otherwise ``False``.
-        - ``HALF_OPEN``   → ``True`` (the single probe). Subsequent callers see
-          OPEN/HALF_OPEN until the probe records success or failure.
+        - ``HALF_OPEN``   → ``True`` for the **single** probe caller only (FIX-11).
+          Concurrent callers receive ``False`` until the probe completes.
         """
         with self._lock:
             self._maybe_half_open_locked()
-            return self._state != _OPEN
+            if self._state == _CLOSED:
+                return True
+            if self._state == _OPEN:
+                return False
+            # HALF_OPEN — single-flight probe
+            if self._probe_in_flight:
+                return False
+            self._probe_in_flight = True
+            return True
 
     def record_success(self) -> None:
         """Record a successful call: reset to CLOSED and clear the counter."""
@@ -93,11 +101,13 @@ class CircuitBreaker:
             self._state = _CLOSED
             self._consecutive_failures = 0
             self._opened_at = 0.0
+            self._probe_in_flight = False
 
     def record_failure(self) -> None:
         """Record a failed call. Trips to OPEN at the threshold; in HALF_OPEN,
         a failure flips straight back to OPEN."""
         with self._lock:
+            self._probe_in_flight = False
             if self._state == _HALF_OPEN:
                 self._state = _OPEN
                 self._opened_at = self._clock()
@@ -113,3 +123,4 @@ class CircuitBreaker:
             return
         if self._clock() - self._opened_at >= self._cooldown_seconds:
             self._state = _HALF_OPEN
+            self._probe_in_flight = False

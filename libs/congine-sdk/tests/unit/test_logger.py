@@ -48,6 +48,14 @@ def test_non_serializable_extra_is_coerced(
     assert isinstance(record["obj"], str)
 
 
+def test_blocked_keys_always_redacted(capsys: pytest.CaptureFixture[str]) -> None:
+    logger = StructuredLogger("congine-test", level="DEBUG")
+    logger.info("hello", api_key="secret-key", contract_id="c1")
+    record = json.loads(capsys.readouterr().out.strip())
+    assert record["api_key"] == "<redacted>"
+    assert record["contract_id"] == "c1"
+
+
 def test_each_call_is_one_line(capsys: pytest.CaptureFixture[str]) -> None:
     logger = StructuredLogger()
     logger.info("a")

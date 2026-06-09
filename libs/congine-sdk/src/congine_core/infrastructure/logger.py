@@ -28,6 +28,17 @@ _DEFAULT_SAFE_FIELDS: FrozenSet[str] = frozenset(
     {"contract_id", "status", "duration_ms", "rule", "field", "error_type"}
 )
 
+# Unconditional blocklist — never logged verbatim (FIX-08).
+_BLOCKED_LOG_KEYS: FrozenSet[str] = frozenset(
+    {
+        "api_key",
+        "authorization",
+        "x-api-key",
+        "payload",
+        "breach_details",
+    }
+)
+
 
 class StructuredLogger:
     """JSON-formatted structured logger writing to stdout."""
@@ -61,11 +72,20 @@ class StructuredLogger:
         """
         if _LEVELS.get(level, _LEVELS["INFO"]) < self._threshold:
             return
-        if self._log_safe_fields is not None and kwargs:
-            kwargs = {
-                k: (v if k in self._log_safe_fields else "<redacted>")
-                for k, v in kwargs.items()
-            }
+        if kwargs:
+            redacted: dict[str, Any] = {}
+            for k, v in kwargs.items():
+                key_lower = k.lower()
+                if key_lower in _BLOCKED_LOG_KEYS:
+                    redacted[k] = "<redacted>"
+                elif (
+                    self._log_safe_fields is not None
+                    and k not in self._log_safe_fields
+                ):
+                    redacted[k] = "<redacted>"
+                else:
+                    redacted[k] = v
+            kwargs = redacted
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": level,

@@ -152,4 +152,5 @@ def config() -> CongineConfig:
         fail_mode=FailMode.DEGRADE,
         cache_capacity=10,
         cache_ttl_seconds=300,
+        start_background_services=False,
     )

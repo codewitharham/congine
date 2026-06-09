@@ -25,6 +25,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "google-re2>=1.0",
     "httpx>=0.28",
     "jsonschema>=4.23",
     "portalocker>=2.8",
@@ -44,10 +45,7 @@ langchain = ["langchain-core>=0.3,<0.4"]
 # Optional math extension for the KS drift engine. Core SDK does not require
 # numpy; install with `pip install congine-sdk[stats]` to use KSDriftEngine.detect.
 stats = ["numpy>=1.26"]
-# Optional linear-time regex backend for ReDoS hardening (audit H3). The core
-# SDK ships fail-closed length caps as the always-on defence; install with
-# `pip install congine-sdk[redos]` to switch the rule engine onto re2 (RE2
-# guarantees no catastrophic backtracking).
+# Backward-compatible alias: google-re2 is now a required core dependency (FIX-02).
 redos = ["google-re2>=1.0"]
 # Development / test toolchain. NOT shipped to runtime consumers; install with
 # `pip install congine-sdk[dev]` (or `uv sync --extra dev`).

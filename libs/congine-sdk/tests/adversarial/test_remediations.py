@@ -28,6 +28,8 @@ def _config(**kw) -> CongineConfig:
         project_id="p",
         tenant_id="t",
         region=Region.US,
+        start_background_services=False,
+        allow_cleartext=True,
     )
     base.update(kw)
     return CongineConfig(**base)
@@ -48,19 +50,20 @@ def _container(**kw) -> ServiceContainer:
 def test_get_default_is_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
     ServiceContainer.reset_default()
     built = {"n": 0}
-    real_from_env = ServiceContainer.from_env.__func__
+    real_init = ServiceContainer.__init__
 
-    @classmethod
-    def counting(cls):
+    def counting_init(self, config, *_a, **_kw):
         built["n"] += 1
-        return real_from_env(cls)
+        return real_init(self, config)
 
-    monkeypatch.setattr(ServiceContainer, "from_env", counting)
+    monkeypatch.setenv("CONGINE_BASE_URL", "http://localhost:8080")
+    monkeypatch.setenv("CONGINE_DEPLOYMENT_MODE", "single_tenant")
+    monkeypatch.setattr(ServiceContainer, "__init__", counting_init)
     try:
         a = ServiceContainer.get_default()
         b = ServiceContainer.get_default()
         assert a is b
-        assert built["n"] == 1  # built exactly once, despite two calls
+        assert built["n"] == 1
     finally:
         ServiceContainer.reset_default()
 
