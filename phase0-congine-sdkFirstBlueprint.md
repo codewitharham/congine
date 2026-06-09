@@ -375,8 +375,8 @@ A Next.js frontend talks to a Python BFF. The BFF guards every LLM response with
 // frontend/api/support-reply.ts (Next.js API route — calls the Python BFF)
 export async function POST(request: Request) {
   const { question } = await request.json();
-  const reply = await fetch('http://bff:8000/api/v1/support/reply', {
-    method: 'POST',
+  const reply = await fetch("http://bff:8000/api/v1/support/reply", {
+    method: "POST",
     body: JSON.stringify({ question }),
   });
   return Response.json(await reply.json());
@@ -428,7 +428,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: actions/setup-python@v5
-        with: { python-version: '3.13' }
+        with: { python-version: "3.13" }
       - run: pip install congine-sdk
       - name: Diff contracts vs main
         run: |

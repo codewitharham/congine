@@ -21,9 +21,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
-  PYTHON_VERSION: '3.13'
-  PYTHON_MIN_VERSION: '3.10'
+  NODE_VERSION: "20"
+  PYTHON_VERSION: "3.13"
+  PYTHON_MIN_VERSION: "3.10"
   UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.uv-python
 
 jobs:
@@ -44,7 +44,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
@@ -80,7 +80,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
@@ -121,7 +121,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
@@ -159,7 +159,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Restore Dependencies
         run: npm ci
@@ -190,7 +190,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
@@ -229,7 +229,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
@@ -279,7 +279,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Setup Python with uv
         uses: astral-sh/setup-uv@v5
