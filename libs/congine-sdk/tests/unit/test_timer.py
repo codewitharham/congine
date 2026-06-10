@@ -7,10 +7,10 @@ import time
 import pytest
 
 from congine_core.infrastructure.timer import ValidationTimer
-
+from congine_core.infrastructure.bounded_executor import BoundedValidationExecutor
 
 def test_returns_result_under_budget() -> None:
-    timer = ValidationTimer()
+    timer = BoundedValidationExecutor()
     try:
         assert timer.run_with_timeout(lambda: 6 * 7, 1000) == 42
     finally:
@@ -18,7 +18,7 @@ def test_returns_result_under_budget() -> None:
 
 
 def test_raises_timeout_on_overrun() -> None:
-    timer = ValidationTimer()
+    timer = BoundedValidationExecutor()
     try:
         with pytest.raises(TimeoutError):
             timer.run_with_timeout(lambda: time.sleep(0.5), 10)
@@ -27,7 +27,7 @@ def test_raises_timeout_on_overrun() -> None:
 
 
 def test_propagates_function_exception() -> None:
-    timer = ValidationTimer()
+    timer = BoundedValidationExecutor()
 
     def boom() -> None:
         raise ValueError("kaboom")
@@ -40,6 +40,6 @@ def test_propagates_function_exception() -> None:
 
 
 def test_shutdown_idempotent() -> None:
-    timer = ValidationTimer()
+    timer = BoundedValidationExecutor()
     timer.shutdown()
     timer.shutdown()  # must not raise
