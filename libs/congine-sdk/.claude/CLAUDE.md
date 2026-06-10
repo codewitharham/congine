@@ -41,7 +41,7 @@ outer layer. (`README.md` and `ARCHITECTURE.md` are the authoritative specs.)
 | Layer | Package                | Contents                                                                                                                                                                                   |
 | ----- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | L0    | `config`, `exceptions` | Frozen `CongineConfig`, exception hierarchy. Imported by all, depend on none.                                                                                                              |
-| L1    | `ports/`               | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`.                                                       |
+| L1    | `ports/`               | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`, `ICircuitBreaker`.                                    |
 | L2    | `domain/`              | Pure logic + immutable models: `RuleEngine`, `LocalValidator`, `CompositeValidator`, `BreachDetail`, `ValidationResult`. No I/O.                                                           |
 | L3    | `usecases/`            | Stateless orchestration: `ValidateContractUseCase`, `SyncContractsUseCase`. Depends only on L1 ports.                                                                                      |
 | L4    | `infrastructure/`      | Side-effecting impls: `LFUCache`, `HttpContractRepository`, `FileContractRepository`, `QueueEventBus`, `BoundedValidationExecutor`, `CircuitBreaker`, `KSDriftEngine`, `StructuredLogger`. |
@@ -121,5 +121,6 @@ features import lazily and raise/skip when their extra is absent:
   over mocks. `asyncio_mode = "auto"` — async tests need no marker.
 - ruff `target-version = py310` is pinned to the supported floor; do not introduce
   3.11+ syntax. `from __future__ import annotations` is used throughout.
-- Code comments reference audit IDs (e.g. `audit M5`, `H3`, `D-4`) from
-  `Phase0_congine_audit.md` — preserve these when editing nearby code.
+- Code comments reference audit IDs (e.g. `audit M5`, `H3`, `D-4`, `FIX-02`) from
+  the workspace-root audit docs (`phase0-congine-newAudit.md`,
+  `phase0-congine-postSessionAudit.md`) — preserve these when editing nearby code.

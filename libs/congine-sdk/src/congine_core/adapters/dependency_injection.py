@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
+from dataclasses import fields, replace
 
 from congine_core.config import CongineConfig, DeploymentMode
 from congine_core.domain.models import TelemetryEvent
@@ -35,8 +36,13 @@ class ServiceContainer:
 
     _default_instance: ClassVar[Optional["ServiceContainer"]] = None
     _default_lock: ClassVar[threading.Lock] = threading.Lock()
+    
+    # Track instances via an insertion-ordered dict acting as a bounded LRU cache
     _tenant_registry: ClassVar[Dict[str, "ServiceContainer"]] = {}
     _tenant_lock: ClassVar[threading.Lock] = threading.Lock()
+    
+    # Safe multi-tenant boundary limit to guarantee resource constraints under load
+    _MAX_TENANTS: ClassVar[int] = 128
 
     @classmethod
     def get_default(cls) -> "ServiceContainer":
@@ -58,6 +64,26 @@ class ServiceContainer:
                 if cls._default_instance is None:
                     cls._default_instance = cls(config)
         return cls._default_instance
+    
+    def close(self) -> None:
+        """Deterministic lifecycle teardown hook.
+        
+        Explicitly breaks internal reference cycles by safely terminating 
+        background worker threads and clearing in-memory caches.
+        """
+        # 1. Kill the LFU Cache sweeper background thread if active
+        if hasattr(self, "schema_storage") and self.schema_storage is not None:
+            try:
+                self.schema_storage.stop_sweeper()
+            except Exception:
+                pass
+        
+        # 2. Terminate telemetry workers and flush remaining logs
+        if hasattr(self, "queue_event_bus") and self.queue_event_bus is not None:
+            try:
+                self.queue_event_bus.shutdown()
+            except Exception:
+                pass
 
     @classmethod
     def for_tenant(
@@ -70,17 +96,21 @@ class ServiceContainer:
     ) -> "ServiceContainer":
         """Return a registry-backed container scoped to *tenant_id* / *project_id*."""
         key = f"{tenant_id}|{project_id}"
+        
         with cls._tenant_lock:
             existing = cls._tenant_registry.get(key)
             if existing is not None:
+    
+                cls._tenant_registry.pop(key)
+                cls._tenant_registry[key] = existing
                 return existing
+            
             if config is None:
                 base = CongineConfig.from_env()
                 overrides = dict(config_overrides)
                 overrides.setdefault("tenant_id", tenant_id)
                 overrides.setdefault("project_id", project_id)
                 overrides["deployment_mode"] = DeploymentMode.MULTI_TENANT
-                from dataclasses import fields, replace
 
                 valid = {f.name for f in fields(CongineConfig)}
                 filtered = {k: v for k, v in overrides.items() if k in valid}
@@ -90,9 +120,21 @@ class ServiceContainer:
                     raise CongineConfigurationError(
                         "for_tenant config tenant_id/project_id must match arguments"
                     )
+            
+            # Resource Eviction Pass: If registry is at capacity, pop and clear the oldest entry
+            if len(cls._tenant_registry) >= cls._MAX_TENANTS:
+                # Python 3.7+ dictionaries preserve insertion order; next(iter(...)) fetches the LRU key
+                oldest_key = next(iter(cls._tenant_registry))
+                oldest_container = cls._tenant_registry.pop(oldest_key)
+                
+                # CRITICAL: Stop background loops so GC can cleanly reclaim C-level memory
+                oldest_container.close()
+
             container = cls(config)
             cls._tenant_registry[key] = container
             return container
+        
+    
 
     @classmethod
     def reset_default(cls) -> None:
