@@ -23,7 +23,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 class ISemanticValidator(Protocol):
     """Structural interface for full-schema semantic validation."""
 
-    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> "List[BreachDetail]":
+    def validate(
+        self, payload: dict[str, Any], schema: dict[str, Any]
+    ) -> "List[BreachDetail]":
         """Validate *payload* against *schema*.
 
         Args:

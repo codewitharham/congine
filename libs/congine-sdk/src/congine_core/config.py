@@ -79,6 +79,7 @@ class CongineConfig:
     # --- Cache ------------------------------------------------------------ #
     cache_capacity: int = 500
     cache_ttl_seconds: int = 300
+    cache_sweep_interval_seconds: float = 30.0
 
     # --- Background sync -------------------------------------------------- #
     sync_enabled: bool = False
@@ -90,6 +91,9 @@ class CongineConfig:
     semantic_format_checking: bool = False
     drift_threshold: float = 0.1
     drift_sample_limit: int = 500
+    # JSON Schema dialect for the semantic validator. Typed as a plain string to
+    # keep L0 free of the heavy ``jsonschema`` import; L4 maps it to a class.
+    jsonschema_draft: str = "draft202012"
 
     # --- Validation pool (bounded, load-shedding) ------------------------ #
     validation_max_workers: int = 10
@@ -98,9 +102,29 @@ class CongineConfig:
     # --- Contract source (local-first / GitOps) -------------------------- #
     contract_source: str = "http"
     contracts_dir: Optional[str] = None
+    # Explicit standalone / offline-first switch: when set, the container binds a
+    # FileContractRepository to this directory and allocates NO background sync
+    # daemon (the boot prime reads the directory once).
+    local_contracts_dir: Optional[str] = None
+
+    # --- Telemetry pipeline (event bus tuning) --------------------------- #
+    # telemetry_enabled=False selects a NoOpEventBus: no drain thread, no I/O.
+    telemetry_enabled: bool = True
+    telemetry_queue_size: int = 10_000
+    telemetry_batch_size: int = 100
+    telemetry_max_retries: int = 4
+    telemetry_backoff_base: float = 0.5
+    telemetry_backoff_max: float = 8.0
+    # Shared control-plane HTTP timeout (telemetry ship client + gateway calls).
+    control_plane_http_timeout_seconds: float = 10.0
 
     # --- Snapshot / security / observability ----------------------------- #
     snapshot_dir: Optional[str] = None
+    # Cross-process snapshot-write lock wait (portalocker). Lower (e.g. 1.0) for
+    # aggressive fail-fast on local NVMe; raise (e.g. 30.0) to ride out heavy
+    # read/write contention on a slow shared cloud mount before skipping the
+    # best-effort write.
+    snapshot_lock_timeout_seconds: float = 10.0
     require_https: bool = True
     allow_cleartext: bool = False
     log_level: str = "INFO"
@@ -176,7 +200,26 @@ class CongineConfig:
             validation_max_pending=cls._env_int("CONGINE_VALIDATION_PENDING", 10),
             contract_source=os.getenv("CONGINE_CONTRACT_SOURCE", "http").lower(),
             contracts_dir=os.getenv("CONGINE_CONTRACTS_DIR"),
+            local_contracts_dir=os.getenv("CONGINE_LOCAL_CONTRACTS_DIR"),
+            cache_sweep_interval_seconds=cls._env_float(
+                "CONGINE_CACHE_SWEEP_INTERVAL_SECONDS", 30.0
+            ),
+            jsonschema_draft=os.getenv("CONGINE_JSONSCHEMA_DRAFT", "draft202012"),
+            control_plane_http_timeout_seconds=cls._env_float(
+                "CONGINE_CONTROL_PLANE_HTTP_TIMEOUT", 10.0
+            ),
+            telemetry_enabled=cls._env_bool("CONGINE_TELEMETRY_ENABLED", True),
+            telemetry_queue_size=cls._env_int("CONGINE_TELEMETRY_QUEUE_SIZE", 10_000),
+            telemetry_batch_size=cls._env_int("CONGINE_TELEMETRY_BATCH_SIZE", 100),
+            telemetry_max_retries=cls._env_int("CONGINE_TELEMETRY_MAX_RETRIES", 4),
+            telemetry_backoff_base=cls._env_float(
+                "CONGINE_TELEMETRY_BACKOFF_BASE", 0.5
+            ),
+            telemetry_backoff_max=cls._env_float("CONGINE_TELEMETRY_BACKOFF_MAX", 8.0),
             snapshot_dir=os.getenv("CONGINE_SNAPSHOT_DIR"),
+            snapshot_lock_timeout_seconds=cls._env_float(
+                "CONGINE_SNAPSHOT_LOCK_TIMEOUT", 10.0
+            ),
             require_https=cls._env_bool("CONGINE_REQUIRE_HTTPS", True),
             allow_cleartext=cls._env_bool("CONGINE_ALLOW_CLEARTEXT", False),
             log_level=os.getenv("CONGINE_LOG_LEVEL", "INFO").upper(),

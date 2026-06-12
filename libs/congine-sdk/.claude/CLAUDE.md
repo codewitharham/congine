@@ -58,6 +58,15 @@ Critical layering rules when adding/moving code:
   constructed. It builds bottom-up (infra → domain → usecases) and injects via
   constructors. No module-level globals; the one sanctioned global is the lazy
   process-wide singleton `ServiceContainer.get_default()`.
+- **Thread every config knob through (avoid "dead-configurable").** When a
+  concrete's `__init__` exposes a parameter that maps to a `CongineConfig` field,
+  the container **must** pass it — e.g. `LFUCache(sweep_interval=…)`,
+  `QueueEventBus(max_queue_size=…, batch_size=…, …)`,
+  `JsonSchemaSemanticValidator(jsonschema_draft=…)`,
+  `HttpContractRepository` reading `config.control_plane_http_timeout_seconds`. An
+  `__init__` hook the container silently drops is a recurring bug class
+  (a developer-facing knob that does nothing); `tests/unit/test_config_wiring.py`
+  guards the env → `from_env()` → container → concrete path for each.
 - `src/congine_core/__init__.py` is the stable public surface (`__all__`). Adding
   a public symbol means re-exporting it there.
 
@@ -77,6 +86,12 @@ Critical layering rules when adding/moving code:
 - Config is environment-driven: every `CongineConfig` field maps to a `CONGINE_*`
   var read by `CongineConfig.from_env()`. `fail_mode` is `strict|degrade|silent`;
   in `strict`, telemetry is published **before** the raise.
+- **Standalone / offline topology (two independent switches).**
+  `CONGINE_LOCAL_CONTRACTS_DIR` binds a `FileContractRepository` to that directory
+  and leaves the sync worker **unallocated** (`container.sync_worker is None` — the
+  four worker call sites guard for `None`); `CONGINE_TELEMETRY_ENABLED=false` swaps
+  `QueueEventBus` for `NoOpEventBus` (no drain thread, no network). Set both for a
+  pure in-process validator with zero control-plane I/O (air-gapped / test runs).
 
 ## Hot-path guarantees (don't regress these)
 
@@ -121,6 +136,10 @@ features import lazily and raise/skip when their extra is absent:
   over mocks. `asyncio_mode = "auto"` — async tests need no marker.
 - ruff `target-version = py310` is pinned to the supported floor; do not introduce
   3.11+ syntax. `from __future__ import annotations` is used throughout.
+- Adding a `CongineConfig` field is a 4-touch change: the frozen dataclass field,
+  the `from_env()` reader (`CONGINE_*`), the `ServiceContainer` wiring (per the
+  Wiring rule above), and the **README config-reference table** — that table is the
+  canonical, user-facing config doc and is easy to leave stale.
 - Code comments reference audit IDs (e.g. `audit M5`, `H3`, `D-4`, `FIX-02`) from
   the workspace-root audit docs (`phase0-congine-newAudit.md`,
   `phase0-congine-postSessionAudit.md`) — preserve these when editing nearby code.

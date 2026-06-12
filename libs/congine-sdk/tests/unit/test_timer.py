@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from congine_core.infrastructure.timer import ValidationTimer
 from congine_core.infrastructure.bounded_executor import BoundedValidationExecutor
+
 
 def test_returns_result_under_budget() -> None:
     timer = BoundedValidationExecutor()

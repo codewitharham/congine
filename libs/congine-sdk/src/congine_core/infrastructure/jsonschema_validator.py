@@ -7,18 +7,65 @@ the ``jsonschema`` library.
 
 from __future__ import annotations
 
-from typing import Any, List
+import re
+from typing import Any, Dict, List, Optional
 
 import jsonschema  # type: ignore[import-untyped]
-from jsonschema import Draft202012Validator
+from jsonschema import (  # type: ignore[import-untyped]
+    Draft4Validator,
+    Draft6Validator,
+    Draft7Validator,
+    Draft201909Validator,
+    Draft202012Validator,
+)
 from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 
 from congine_core.domain.models import BreachDetail
+from congine_core.exceptions import CongineConfigurationError
 from congine_core.pii_sanitize import sanitize_breach_message
 from congine_core.security_limits import (
     DEFAULT_SEMANTIC_MAX_BREACHES,
     MAX_PATTERN_LENGTH,
 )
+
+#: Maps a normalized ``jsonschema_draft`` config string to its validator class.
+#: Keys are stripped of non-alphanumerics and lower-cased (see ``_resolve_draft``)
+#: so spellings like ``"Draft 2020-12"``, ``"draft202012"`` and ``"2020"`` unify.
+_DRAFT_VALIDATORS: Dict[str, type] = {
+    "draft202012": Draft202012Validator,
+    "202012": Draft202012Validator,
+    "2020": Draft202012Validator,
+    "draft201909": Draft201909Validator,
+    "201909": Draft201909Validator,
+    "2019": Draft201909Validator,
+    "draft7": Draft7Validator,
+    "draft07": Draft7Validator,
+    "7": Draft7Validator,
+    "07": Draft7Validator,
+    "draft6": Draft6Validator,
+    "draft06": Draft6Validator,
+    "6": Draft6Validator,
+    "draft4": Draft4Validator,
+    "draft04": Draft4Validator,
+    "4": Draft4Validator,
+}
+
+
+def _resolve_draft(draft: str) -> type:
+    """Map a ``jsonschema_draft`` config string to its validator class.
+
+    Fail-closed: an unrecognised dialect raises :class:`CongineConfigurationError`
+    rather than silently defaulting, so a typo'd ``CONGINE_JSONSCHEMA_DRAFT`` is
+    surfaced at container construction instead of validating under the wrong spec.
+    """
+    key = re.sub(r"[^a-z0-9]", "", str(draft).lower())
+    try:
+        return _DRAFT_VALIDATORS[key]
+    except KeyError:
+        raise CongineConfigurationError(
+            f"Unsupported jsonschema_draft {draft!r}. Supported dialects: "
+            "draft202012, draft201909, draft7, draft6, draft4."
+        ) from None
 
 
 class JsonSchemaSemanticValidator:
@@ -26,20 +73,32 @@ class JsonSchemaSemanticValidator:
 
     def __init__(
         self,
-        validator_cls: type[Any] = Draft202012Validator,
+        validator_cls: Optional[type[Any]] = None,
         max_breaches: int = DEFAULT_SEMANTIC_MAX_BREACHES,
         format_checking: bool = False,
+        jsonschema_draft: str = "draft202012",
     ) -> None:
         """Args:
-        validator_cls: The ``jsonschema`` validator class to use.
+        validator_cls: Explicit ``jsonschema`` validator class. When ``None``
+            (the container default) the class is resolved from *jsonschema_draft*;
+            passing a class directly still works and takes precedence (test seam).
         max_breaches: Hard cap on errors drained from ``iter_errors`` (FIX-03).
         format_checking: When ``False`` (default), format assertions are off.
+        jsonschema_draft: Config-driven dialect string (e.g. ``"draft202012"``,
+            ``"draft7"``) resolved to a validator class when *validator_cls* is
+            ``None``. Unrecognised values fail closed (``CongineConfigurationError``).
         """
-        self._validator_cls = validator_cls
+        self._validator_cls = (
+            validator_cls
+            if validator_cls is not None
+            else _resolve_draft(jsonschema_draft)
+        )
         self._max_breaches = max_breaches
         self._format_checking = format_checking
 
-    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> List[BreachDetail]:
+    def validate(
+        self, payload: dict[str, Any], schema: dict[str, Any]
+    ) -> List[BreachDetail]:
         """Return a :class:`BreachDetail` for every JSON Schema violation."""
         pattern_breaches = self._check_schema_patterns(schema)
         if pattern_breaches:

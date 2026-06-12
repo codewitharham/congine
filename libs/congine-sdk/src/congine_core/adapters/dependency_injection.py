@@ -7,6 +7,8 @@ import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
 from dataclasses import fields, replace
 
+import httpx
+
 from congine_core.config import CongineConfig, DeploymentMode
 from congine_core.domain.models import TelemetryEvent
 from congine_core.exceptions import CongineConfigurationError
@@ -22,10 +24,12 @@ from congine_core.infrastructure.jsonschema_validator import (
 from congine_core.infrastructure.ks_drift import KSDriftEngine
 from congine_core.infrastructure.lfu_cache import LFUCache
 from congine_core.infrastructure.logger import StructuredLogger
+from congine_core.infrastructure.noop_event_bus import NoOpEventBus
 from congine_core.infrastructure.queue_event_bus import QueueEventBus
 from congine_core.usecases.sync_contracts_usecase import SyncContractsUseCase
 from congine_core.usecases.validate_contract_usecase import ValidateContractUseCase
 from congine_core.ports.contract_repository import IContractRepository
+from congine_core.ports.event_bus import IEventBus
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import DriftResult
@@ -36,11 +40,11 @@ class ServiceContainer:
 
     _default_instance: ClassVar[Optional["ServiceContainer"]] = None
     _default_lock: ClassVar[threading.Lock] = threading.Lock()
-    
+
     # Track instances via an insertion-ordered dict acting as a bounded LRU cache
     _tenant_registry: ClassVar[Dict[str, "ServiceContainer"]] = {}
     _tenant_lock: ClassVar[threading.Lock] = threading.Lock()
-    
+
     # Safe multi-tenant boundary limit to guarantee resource constraints under load
     _MAX_TENANTS: ClassVar[int] = 128
 
@@ -64,26 +68,6 @@ class ServiceContainer:
                 if cls._default_instance is None:
                     cls._default_instance = cls(config)
         return cls._default_instance
-    
-    def close(self) -> None:
-        """Deterministic lifecycle teardown hook.
-        
-        Explicitly breaks internal reference cycles by safely terminating 
-        background worker threads and clearing in-memory caches.
-        """
-        # 1. Kill the LFU Cache sweeper background thread if active
-        if hasattr(self, "schema_storage") and self.schema_storage is not None:
-            try:
-                self.schema_storage.stop_sweeper()
-            except Exception:
-                pass
-        
-        # 2. Terminate telemetry workers and flush remaining logs
-        if hasattr(self, "queue_event_bus") and self.queue_event_bus is not None:
-            try:
-                self.queue_event_bus.shutdown()
-            except Exception:
-                pass
 
     @classmethod
     def for_tenant(
@@ -96,15 +80,14 @@ class ServiceContainer:
     ) -> "ServiceContainer":
         """Return a registry-backed container scoped to *tenant_id* / *project_id*."""
         key = f"{tenant_id}|{project_id}"
-        
+
         with cls._tenant_lock:
             existing = cls._tenant_registry.get(key)
             if existing is not None:
-    
                 cls._tenant_registry.pop(key)
                 cls._tenant_registry[key] = existing
                 return existing
-            
+
             if config is None:
                 base = CongineConfig.from_env()
                 overrides = dict(config_overrides)
@@ -120,21 +103,19 @@ class ServiceContainer:
                     raise CongineConfigurationError(
                         "for_tenant config tenant_id/project_id must match arguments"
                     )
-            
+
             # Resource Eviction Pass: If registry is at capacity, pop and clear the oldest entry
             if len(cls._tenant_registry) >= cls._MAX_TENANTS:
                 # Python 3.7+ dictionaries preserve insertion order; next(iter(...)) fetches the LRU key
                 oldest_key = next(iter(cls._tenant_registry))
                 oldest_container = cls._tenant_registry.pop(oldest_key)
-                
+
                 # CRITICAL: Stop background loops so GC can cleanly reclaim C-level memory
                 oldest_container.close()
 
             container = cls(config)
             cls._tenant_registry[key] = container
             return container
-        
-    
 
     @classmethod
     def reset_default(cls) -> None:
@@ -173,14 +154,27 @@ class ServiceContainer:
         self.schema_storage = LFUCache(
             capacity=config.cache_capacity,
             ttl_seconds=config.cache_ttl_seconds,
+            sweep_interval=config.cache_sweep_interval_seconds,
             start_sweeper=start_bg,
         )
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=config.breaker_failure_threshold,
             cooldown_seconds=config.breaker_cooldown_seconds,
         )
+        # Standalone, offline-first topology: an explicit local_contracts_dir binds
+        # a FileContractRepository straight to disk and suppresses the background
+        # sync daemon (the boot prime reads the directory once). Falls back to the
+        # legacy file-source switch, then to the HTTP control plane.
+        self._standalone = config.local_contracts_dir is not None
         self.contract_repository: IContractRepository
-        if config.contract_source == "file" and config.contracts_dir is not None:
+        if self._standalone:
+            self.contract_repository = FileContractRepository(
+                contracts_dir=config.local_contracts_dir,
+                logger=self.logger,
+                max_contract_files=config.max_contract_files,
+                max_file_bytes=config.max_schema_bytes,
+            )
+        elif config.contract_source == "file" and config.contracts_dir is not None:
             self.contract_repository = FileContractRepository(
                 contracts_dir=config.contracts_dir,
                 logger=self.logger,
@@ -189,15 +183,30 @@ class ServiceContainer:
             )
         else:
             self.contract_repository = HttpContractRepository(config, self.logger)
-        self.event_bus = QueueEventBus(
-            config=config,
-            logger=self.logger,
-            circuit_breaker=self.circuit_breaker,
-            start_worker=start_bg,
-        )
+        self.event_bus: IEventBus
+        if not config.telemetry_enabled:
+            # Offline / test mode: discard telemetry with no drain thread and no
+            # network client, so nothing trails behind at shutdown (FIX).
+            self.event_bus = NoOpEventBus()
+        else:
+            self.event_bus = QueueEventBus(
+                config=config,
+                logger=self.logger,
+                max_queue_size=config.telemetry_queue_size,
+                batch_size=config.telemetry_batch_size,
+                max_retries=config.telemetry_max_retries,
+                backoff_base=config.telemetry_backoff_base,
+                backoff_max=config.telemetry_backoff_max,
+                client_factory=lambda: httpx.Client(
+                    timeout=config.control_plane_http_timeout_seconds
+                ),
+                circuit_breaker=self.circuit_breaker,
+                start_worker=start_bg,
+            )
         self.semantic_validator = JsonSchemaSemanticValidator(
             max_breaches=config.semantic_max_breaches,
             format_checking=config.semantic_format_checking,
+            jsonschema_draft=config.jsonschema_draft,
         )
         self.drift_engine = KSDriftEngine(
             threshold=config.drift_threshold,
@@ -235,13 +244,19 @@ class ServiceContainer:
             boot_lock_path=boot_lock_path,
         )
 
-        self.sync_worker = BackgroundSyncWorker(
-            self.sync_contracts_usecase,
-            interval_seconds=config.sync_interval_seconds,
-            logger=self.logger,
-            run_immediately=False,
-            start_worker=False,
-        )
+        # Standalone file mode needs no periodic re-sync daemon; leave the worker
+        # unallocated so no background network loop is ever created (FIX).
+        self.sync_worker: Optional[BackgroundSyncWorker]
+        if self._standalone:
+            self.sync_worker = None
+        else:
+            self.sync_worker = BackgroundSyncWorker(
+                self.sync_contracts_usecase,
+                interval_seconds=config.sync_interval_seconds,
+                logger=self.logger,
+                run_immediately=False,
+                start_worker=False,
+            )
 
     @classmethod
     def from_env(cls) -> "ServiceContainer":
@@ -273,7 +288,8 @@ class ServiceContainer:
         return loaded
 
     def start_background_sync(self) -> None:
-        self.sync_worker.start()
+        if self.sync_worker is not None:
+            self.sync_worker.start()
 
     def record_drift_sample(self, value: float) -> None:
         self.drift_engine.add_reference(value)
@@ -320,13 +336,16 @@ class ServiceContainer:
             "telemetry_dropped_total": dropped_total()
             if callable(dropped_total)
             else 0,
-            "sync_running": self.sync_worker.is_running(),
+            "sync_running": (
+                self.sync_worker.is_running() if self.sync_worker is not None else False
+            ),
             "drift_reference_samples": self.drift_engine.sample_count,
             "breaker_state": self.circuit_breaker.state,
         }
 
     def close(self) -> None:
-        self.sync_worker.stop()
+        if self.sync_worker is not None:
+            self.sync_worker.stop()
         self.schema_storage.stop()
         self.event_bus.stop(drain=True)
         self.validation_executor.shutdown(wait=False)

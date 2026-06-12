@@ -95,7 +95,9 @@ class RuleEngine:
     """
 
     @staticmethod
-    def FIELD_PRESENCE(payload: dict[str, Any], required_fields: List[str]) -> List[BreachDetail]:
+    def FIELD_PRESENCE(
+        payload: dict[str, Any], required_fields: List[str]
+    ) -> List[BreachDetail]:
         """Rule 1: every required field must be present in *payload*.
 
         Field names may use dot-notation (``"a.b.c"``) to require nested keys;
@@ -114,7 +116,9 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def TYPE_MATCH(payload: dict[str, Any], schema_properties: dict[str, Any]) -> List[BreachDetail]:
+    def TYPE_MATCH(
+        payload: dict[str, Any], schema_properties: dict[str, Any]
+    ) -> List[BreachDetail]:
         """Rule 2: present fields must match their declared schema type.
 
         *schema_properties* maps field name to either a JSON-schema property
@@ -142,7 +146,9 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def ENUM_VALUES(payload: dict[str, Any], enum_map: dict[str, Any]) -> List[BreachDetail]:
+    def ENUM_VALUES(
+        payload: dict[str, Any], enum_map: dict[str, Any]
+    ) -> List[BreachDetail]:
         """Rule 3: present enum fields must hold an allowed value.
 
         *enum_map* maps field name to a mapping containing an ``"enum"`` list.
@@ -163,7 +169,9 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def RANGE_CHECK(payload: dict[str, Any], range_map: dict[str, Any]) -> List[BreachDetail]:
+    def RANGE_CHECK(
+        payload: dict[str, Any], range_map: dict[str, Any]
+    ) -> List[BreachDetail]:
         """Rule 4: present numeric fields must lie within their range.
 
         *range_map* maps field name to a mapping with optional ``"min"``/
@@ -202,7 +210,9 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def NULL_GUARD(payload: dict[str, Any], null_forbidden: List[str]) -> List[BreachDetail]:
+    def NULL_GUARD(
+        payload: dict[str, Any], null_forbidden: List[str]
+    ) -> List[BreachDetail]:
         """Rule 5: listed fields must not be ``None`` when present."""
         breaches: List[BreachDetail] = []
         for field_name in null_forbidden:
@@ -217,7 +227,9 @@ class RuleEngine:
         return breaches
 
     @staticmethod
-    def REGEX_PATTERN(payload: dict[str, Any], pattern_map: dict[str, Any]) -> List[BreachDetail]:
+    def REGEX_PATTERN(
+        payload: dict[str, Any], pattern_map: dict[str, Any]
+    ) -> List[BreachDetail]:
         """Rule 6: present string fields must match their regex.
 
         *pattern_map* maps field name to a mapping containing a ``"pattern"``.
@@ -282,7 +294,9 @@ class RuleEngine:
 class IValidator(Protocol):
     """Interface: a validation strategy."""
 
-    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> ValidationResult:
+    def validate(
+        self, payload: dict[str, Any], schema: dict[str, Any]
+    ) -> ValidationResult:
         """Validate *payload* against *schema*."""
         ...
 
@@ -352,7 +366,9 @@ class LocalValidator:
             }
         return {}
 
-    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> ValidationResult:
+    def validate(
+        self, payload: dict[str, Any], schema: dict[str, Any]
+    ) -> ValidationResult:
         """Compose all configured rules and return a :class:`ValidationResult`.
 
         Args:
@@ -417,7 +433,9 @@ class CompositeValidator:
         self.rule_validator = rule_validator
         self.semantic_validator = semantic_validator
 
-    def validate(self, payload: dict[str, Any], schema: dict[str, Any]) -> ValidationResult:
+    def validate(
+        self, payload: dict[str, Any], schema: dict[str, Any]
+    ) -> ValidationResult:
         """Run both validators and merge their breaches.
 
         Args:

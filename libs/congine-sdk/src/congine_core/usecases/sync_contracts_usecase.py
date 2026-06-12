@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 from congine_core.exceptions import CongineSyncError
 from congine_core.ports.contract_repository import IContractRepository

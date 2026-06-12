@@ -16,6 +16,7 @@ from congine_core.infrastructure.jsonschema_validator import (
 from congine_core.infrastructure.ks_drift import KSDriftEngine
 from congine_core.infrastructure.lfu_cache import LFUCache
 from congine_core.infrastructure.logger import StructuredLogger
+from congine_core.infrastructure.noop_event_bus import NoOpEventBus
 from congine_core.infrastructure.queue_event_bus import QueueEventBus
 
 # Intentionally NOT exported (audit D-3/D-11): ValidationTimer.
@@ -28,6 +29,7 @@ __all__ = [
     "HttpContractRepository",
     "FileContractRepository",
     "QueueEventBus",
+    "NoOpEventBus",
     "StructuredLogger",
     "BackgroundSyncWorker",
     "JsonSchemaSemanticValidator",

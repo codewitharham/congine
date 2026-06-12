@@ -23,7 +23,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional, cast
+from typing import Any, Iterator, Optional, cast
 
 import httpx
 
@@ -38,9 +38,6 @@ except ImportError:  # pragma: no cover - portalocker is a declared core depende
 from congine_core.config import CongineConfig
 from congine_core.exceptions import CongineSyncError
 from congine_core.ports.logger import ILogger
-
-#: Seconds to wait for the cross-process snapshot lock before giving up the write.
-_SNAPSHOT_LOCK_TIMEOUT = 10.0
 
 
 def _default_snapshot_dir() -> str:
@@ -116,7 +113,9 @@ class HttpContractRepository:
 
         max_bytes = self.config.max_http_response_bytes
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(
+                timeout=self.config.control_plane_http_timeout_seconds
+            ) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 if len(response.content) > max_bytes:
@@ -215,7 +214,7 @@ class HttpContractRepository:
         """Hold an advisory cross-process lock for the snapshot write.
 
         Yields ``True`` while the exclusive lock is held, ``False`` if it could
-        not be acquired within :data:`_SNAPSHOT_LOCK_TIMEOUT` (or if
+        not be acquired within ``config.snapshot_lock_timeout_seconds`` (or if
         ``portalocker`` is unavailable, in which case the caller falls back to
         the still-atomic ``os.replace`` with no cross-process serialization).
         """
@@ -224,12 +223,12 @@ class HttpContractRepository:
             return
         lock_path = f"{self._snapshot_path}.lock"
         # Non-blocking flag so the timeout is honoured: portalocker retries the
-        # acquire until _SNAPSHOT_LOCK_TIMEOUT, then raises (blocking mode would
-        # ignore the timeout and wait forever).
+        # acquire until snapshot_lock_timeout_seconds, then raises (blocking mode
+        # would ignore the timeout and wait forever).
         lock = portalocker.Lock(
             lock_path,
             mode="a",
-            timeout=_SNAPSHOT_LOCK_TIMEOUT,
+            timeout=self.config.snapshot_lock_timeout_seconds,
             flags=portalocker.LOCK_EX | portalocker.LOCK_NB,
         )
         try:
@@ -264,7 +263,10 @@ class HttpContractRepository:
         contracts = snapshot.get("contracts")
         if not isinstance(contracts, list):
             return None
-        return cast(list[dict[str, Any]], [c for c in contracts if isinstance(c, dict)]) or None
+        return (
+            cast(list[dict[str, Any]], [c for c in contracts if isinstance(c, dict)])
+            or None
+        )
 
     def _warn(self, message: str, **kwargs: Any) -> None:
         if self.logger is not None:

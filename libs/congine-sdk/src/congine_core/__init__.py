@@ -40,6 +40,7 @@ from congine_core.infrastructure import (
     JsonSchemaSemanticValidator,
     KSDriftEngine,
     LFUCache,
+    NoOpEventBus,
     QueueEventBus,
     StructuredLogger,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "HttpContractRepository",
     "FileContractRepository",
     "QueueEventBus",
+    "NoOpEventBus",
     "StructuredLogger",
     "BackgroundSyncWorker",
     "BoundedValidationExecutor",

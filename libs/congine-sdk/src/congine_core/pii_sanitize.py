@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 
-# Enhanced regular expression pattern to target both single and double quoted values 
+# Enhanced regular expression pattern to target both single and double quoted values
 # along with raw numerical sequences to prevent unintended PII exposure
 _STRONG_SANITIZATION_RE = re.compile(r"(['\"])(.*?)\1|(\b\d{4,}\b)")
 
