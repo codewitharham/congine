@@ -1,0 +1,21 @@
+[project]
+name = "congine-langchain-example"
+version = "0.1.0"
+description = "Runnable example: a deepagents + Gemini agent guarded by congine-sdk contracts"
+requires-python = ">=3.11" # deepagents requires >=3.11
+dependencies = [
+    "congine-sdk",
+    "congine-sdk[langchain]",      # the SDK itself + langchain-core (enables CongineCallbackHandler)
+    "deepagents>=0.0.5",           # deep-agent framework that drives the tool-calling loop
+    "google-genai>=2.8.0",
+    "langchain>=0.3.30",           # init_chat_model() + @tool
+    "langchain-google-genai>=2.0", # the `google_genai:` provider for init_chat_model (Gemini)
+    "python-dotenv>=1.0",          # `from dotenv import load_dotenv` — load .env into os.environ
+]
+
+[tool.uv]
+# This is a runnable example, not a distributable library: tell uv not to build it
+# as a package (it has no src/ layout or build backend).
+package = false
+
+

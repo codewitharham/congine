@@ -3,7 +3,7 @@ name = "congine-sdk"
 version = "0.1.0"
 description = "Core validation engine for AMCE — contract-driven governance for LLM outputs"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "Congine" },
@@ -58,6 +58,9 @@ dev = [
 
 [tool.uv]
 package = true
+
+
+
 
 [tool.ruff]
 # Pin the target version to the supported floor so format/check do not rewrite

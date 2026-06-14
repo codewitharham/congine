@@ -1,0 +1,13 @@
+{
+  "id": "customer.support.return_processing",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "ticket_id": { "type": "string", "pattern": "^TKT-\\d{4}$" },
+      "action": { "type": "string", "enum": ["approve_return", "reject_return", "escalate"] },
+      "confidence_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+      "summary": { "type": "string", "minLength": 10 }
+    },
+    "required": ["ticket_id", "action", "confidence_score", "summary"]
+  }
+}

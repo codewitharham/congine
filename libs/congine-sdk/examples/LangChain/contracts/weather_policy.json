@@ -1,0 +1,12 @@
+{
+  "id": "analytics.weather.extraction",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "city": { "type": "string" },
+      "temperature_celsius": { "type": "number" },
+      "condition": { "type": "string", "enum": ["sunny", "rainy", "cloudy", "snowy"] }
+    },
+    "required": ["city", "temperature_celsius", "condition"]
+  }
+}

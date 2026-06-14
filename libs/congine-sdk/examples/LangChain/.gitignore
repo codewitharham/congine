@@ -1,0 +1,9 @@
+# Secrets — never commit a real API key
+.env
+
+# Local virtualenv
+.venv/
+
+# Python caches
+__pycache__/
+*.pyc

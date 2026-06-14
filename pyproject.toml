@@ -3,8 +3,8 @@ name = "congine-workspace"
 version = "0.1.0"
 description = "A Deterministic AI Module Contract Enforcement Engine"
 readme = "README.md"
-requires-python = ">=3.10"  
+requires-python = ">=3.11"  
 dependencies = []
 
 [tool.uv]
-workspace = { members = ["apps/*", "libs/*"] }
+workspace = { members = ["apps/*", "libs/*", "libs/congine-sdk/examples/LangChain"] }
