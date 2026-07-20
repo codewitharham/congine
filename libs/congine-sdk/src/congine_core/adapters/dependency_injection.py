@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
+import weakref
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
 from dataclasses import fields, replace
 
@@ -35,6 +37,31 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.domain.models import DriftResult
 
 
+def _teardown_components(
+    sync_worker: Any,
+    schema_storage: Any,
+    event_bus: Any,
+    validation_executor: Any,
+) -> None:
+    """Best-effort, non-blocking teardown for a deferred (evicted) container.
+
+    Invoked by :func:`weakref.finalize` on an arbitrary thread once the container
+    is unreferenced. Uses ``drain=False`` so a slow/unreachable control plane
+    cannot stall the finalizer, and suppresses per-component errors so one failing
+    component cannot block the others or escape the finalizer. Takes the components
+    as arguments (never the container) so it holds no strong reference back to it.
+    """
+    if sync_worker is not None:
+        with contextlib.suppress(Exception):
+            sync_worker.stop()
+    with contextlib.suppress(Exception):
+        schema_storage.stop()
+    with contextlib.suppress(Exception):
+        event_bus.stop(drain=False)
+    with contextlib.suppress(Exception):
+        validation_executor.shutdown(wait=False)
+
+
 class ServiceContainer:
     """Assemble and own the full Congine object graph."""
 
@@ -47,6 +74,9 @@ class ServiceContainer:
 
     # Safe multi-tenant boundary limit to guarantee resource constraints under load
     _MAX_TENANTS: ClassVar[int] = 128
+
+    # Monotonic count of tenant-container evictions (observability, audit P0-1).
+    _evicted_total: ClassVar[int] = 0
 
     @classmethod
     def get_default(cls) -> "ServiceContainer":
@@ -78,9 +108,24 @@ class ServiceContainer:
         config: Optional[CongineConfig] = None,
         **config_overrides: Any,
     ) -> "ServiceContainer":
-        """Return a registry-backed container scoped to *tenant_id* / *project_id*."""
+        """Return a registry-backed container scoped to *tenant_id* / *project_id*.
+
+        The registry is a bounded (``_MAX_TENANTS``) insertion-ordered LRU. Recency
+        is keyed on **``for_tenant()`` lookups, not validation activity**: a container
+        fetched once and reused heavily still ages toward the LRU end unless it is
+        looked up again. When the registry is full, the least-recently-*looked-up*
+        entry is evicted.
+
+        Eviction only *removes the registry entry* — it does **not** tear the
+        container down. A caller still holding a reference to an evicted container
+        keeps using it normally; its background daemons/pool are stopped lazily (via
+        :func:`weakref.finalize`) once it becomes unreferenced. Teardown never runs
+        while ``_tenant_lock`` is held, so one eviction cannot stall other tenants'
+        lookups (audit P0-1 / H-1).
+        """
         key = f"{tenant_id}|{project_id}"
 
+        evicted_key: Optional[str] = None
         with cls._tenant_lock:
             existing = cls._tenant_registry.get(key)
             if existing is not None:
@@ -104,33 +149,63 @@ class ServiceContainer:
                         "for_tenant config tenant_id/project_id must match arguments"
                     )
 
-            # Resource Eviction Pass: If registry is at capacity, pop and clear the oldest entry
+            # Resource eviction pass. At capacity, remove the LRU registry entry and
+            # arm *deferred* teardown. We MUST NOT call close() here: the evicted
+            # container may still be referenced by a live caller, and close() both
+            # tears down that live container and can block on a telemetry drain while
+            # cls._tenant_lock is held (audit P0-1 / H-1).
             if len(cls._tenant_registry) >= cls._MAX_TENANTS:
-                # Python 3.7+ dictionaries preserve insertion order; next(iter(...)) fetches the LRU key
-                oldest_key = next(iter(cls._tenant_registry))
-                oldest_container = cls._tenant_registry.pop(oldest_key)
-
-                # CRITICAL: Stop background loops so GC can cleanly reclaim C-level memory
-                oldest_container.close()
+                # Python 3.7+ dicts preserve insertion order; next(iter(...)) is the LRU key.
+                evicted_key = next(iter(cls._tenant_registry))
+                oldest_container = cls._tenant_registry.pop(evicted_key)
+                cls._evicted_total += 1
+                # Cheap: registers a weakref.finalize; performs NO teardown now.
+                oldest_container._arm_deferred_teardown()
 
             container = cls(config)
             cls._tenant_registry[key] = container
-            return container
+
+        # --- outside cls._tenant_lock: no teardown/blocking I/O under the lock --- #
+        if evicted_key is not None:
+            container.logger.warning(
+                "Tenant container evicted (least-recently-looked-up); teardown "
+                "deferred until it is no longer referenced",
+                evicted_key=evicted_key,
+                evicted_total=cls._evicted_total,
+            )
+        return container
 
     @classmethod
     def reset_default(cls) -> None:
-        """Tear down and clear the shared default container (idempotent)."""
+        """Tear down and clear the shared default + all tenant containers (idempotent).
+
+        ``close()`` runs **outside** both class locks so a slow telemetry drain
+        cannot block concurrent ``get_default()`` / ``for_tenant()`` callers (P0-1).
+        """
         with cls._default_lock:
-            if cls._default_instance is not None:
-                cls._default_instance.close()
-                cls._default_instance = None
+            default = cls._default_instance
+            cls._default_instance = None
         with cls._tenant_lock:
-            for container in cls._tenant_registry.values():
-                container.close()
+            tenants = list(cls._tenant_registry.values())
             cls._tenant_registry.clear()
+
+        if default is not None:
+            default.close()
+        for container in tenants:
+            container.close()
+
+    @classmethod
+    def evicted_total(cls) -> int:
+        """Monotonic count of tenant-container evictions since process start (P0-1)."""
+        return cls._evicted_total
 
     def __init__(self, config: CongineConfig) -> None:
         self.config = config
+        # Lifecycle guards (audit P0-1): make close() idempotent and let an evicted
+        # container defer teardown until it is genuinely unreferenced.
+        self._closed = False
+        self._close_lock = threading.Lock()
+        self._finalizer: Optional[weakref.finalize] = None
         start_bg = config.start_background_services
 
         self.logger = StructuredLogger(
@@ -343,12 +418,42 @@ class ServiceContainer:
             "breaker_state": self.circuit_breaker.state,
         }
 
+    def _arm_deferred_teardown(self) -> None:
+        """Schedule bounded teardown for when this (evicted) container is no longer
+        referenced. Cheap and non-blocking: registers a :func:`weakref.finalize` and
+        performs NO teardown now. The finalizer captures the sub-components (never
+        ``self``) so it cannot keep the container alive."""
+        with self._close_lock:
+            if self._closed or self._finalizer is not None:
+                return
+            self._finalizer = weakref.finalize(
+                self,
+                _teardown_components,
+                self.sync_worker,
+                self.schema_storage,
+                self.event_bus,
+                self.validation_executor,
+            )
+
     def close(self) -> None:
+        """Idempotent teardown. Explicit callers keep the full ``drain=True`` flush.
+
+        Teardown runs outside any class lock. If a deferred-teardown finalizer was
+        armed (this container was evicted), it is detached so teardown happens once.
+        """
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
         if self.sync_worker is not None:
             self.sync_worker.stop()
         self.schema_storage.stop()
         self.event_bus.stop(drain=True)
         self.validation_executor.shutdown(wait=False)
+        finalizer = self._finalizer
+        self._finalizer = None
+        if finalizer is not None:
+            finalizer.detach()
 
     def __enter__(self) -> "ServiceContainer":
         return self
