@@ -280,3 +280,34 @@ def test_snapshot_lock_timeout_propagates_to_portalocker(
     repo.save_snapshot([{"id": "c1", "schema": {"type": "object"}}])
 
     assert captured["timeout"] == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# 7. Semantic-validation flag reaches the sync use case (audit P0-2)
+# --------------------------------------------------------------------------- #
+def test_semantic_validation_flag_reaches_sync_usecase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CONGINE_SEMANTIC_VALIDATION must reach SyncContractsUseCase so the
+    unenforced-keyword diagnostic knows whether those keywords are enforced."""
+    _baseline_env(monkeypatch, CONGINE_SEMANTIC_VALIDATION="true")
+
+    container = ServiceContainer.from_env()
+    try:
+        assert container.config.semantic_validation_enabled is True
+        assert container.sync_contracts_usecase.semantic_validation_enabled is True
+    finally:
+        container.close()
+
+
+def test_semantic_validation_defaults_false_in_sync_usecase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent the env var, the sync use case defaults to the diagnostic being on."""
+    _baseline_env(monkeypatch)
+
+    container = ServiceContainer.from_env()
+    try:
+        assert container.sync_contracts_usecase.semantic_validation_enabled is False
+    finally:
+        container.close()

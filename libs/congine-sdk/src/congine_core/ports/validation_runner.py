@@ -15,9 +15,11 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Protocol, runtime_checkable
 
+from congine_core.ports.lifecycle import IObservable
+
 
 @runtime_checkable
-class IValidationRunner(Protocol):
+class IValidationRunner(IObservable, Protocol):
     """Structural interface for bounded, timed execution of validation callables.
 
     Implementations are expected to enforce:
@@ -33,6 +35,11 @@ class IValidationRunner(Protocol):
     The async variant (:meth:`run_with_timeout_async`) is required so async
     callers receive the **identical** capacity bound and deadline as sync
     callers — closing audit H1/H2.
+
+    Composes :class:`~congine_core.ports.lifecycle.IObservable` (the container
+    reports ``in_flight`` and ``rejected_total`` in ``health()``) and
+    additionally requires :meth:`shutdown`, which ``close()`` calls — both
+    previously undeclared (audit Q8).
     """
 
     @property
@@ -91,5 +98,17 @@ class IValidationRunner(Protocol):
             A mapping containing at least ``in_flight`` (current outstanding
             work), ``rejected_total`` (cumulative load-shed count), and
             ``capacity`` (the outstanding-work ceiling).
+        """
+        ...
+
+    def shutdown(self, wait: bool = False) -> None:
+        """Release the runner's worker threads (idempotent).
+
+        Called by :meth:`ServiceContainer.close` with ``wait=False``: teardown
+        must not block on work already in flight, because a timed-out validation
+        cannot be cancelled and could otherwise stall shutdown indefinitely.
+
+        Args:
+            wait: When ``True``, block until running work completes.
         """
         ...

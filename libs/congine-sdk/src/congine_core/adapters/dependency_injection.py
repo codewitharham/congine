@@ -80,24 +80,40 @@ class ServiceContainer:
 
     @classmethod
     def get_default(cls) -> "ServiceContainer":
-        """Return the lazily-initialised, process-wide shared container.
+        """Return the lazily-initialised, process-wide shared container (audit C1).
 
         Raises :class:`CongineConfigurationError` in ``multi_tenant`` deployment
         mode — callers must pass an explicit ``container=`` or use
-        :meth:`for_tenant` (FIX-05).
+        :meth:`for_tenant` (FIX-05). The mode is re-read from the environment on
+        every call so flipping ``CONGINE_DEPLOYMENT_MODE`` disables the shared
+        singleton immediately, even once one has been built.
+
+        Only that **one** variable is read on the cached path (audit Q10). This
+        method is on the hot path: ``@congine_guard`` with no explicit
+        ``container=`` resolves through it on *every guarded call*, and it used
+        to run a full :meth:`CongineConfig.from_env` — parsing and validating
+        ~47 variables per request, and able to raise mid-request even when a
+        perfectly good singleton already existed.
         """
-        config = CongineConfig.from_env()
-        if config.deployment_mode is DeploymentMode.MULTI_TENANT:
+        if cls._deployment_mode_is_multi_tenant():
             raise CongineConfigurationError(
                 "ServiceContainer.get_default() is disabled in multi_tenant mode. "
                 "Pass container= explicitly per tenant, or use "
                 "ServiceContainer.for_tenant(tenant_id, project_id)."
             )
-        if cls._default_instance is None:
-            with cls._default_lock:
-                if cls._default_instance is None:
-                    cls._default_instance = cls(config)
-        return cls._default_instance
+        instance = cls._default_instance
+        if instance is not None:
+            return instance
+        with cls._default_lock:
+            if cls._default_instance is None:
+                # Full environment parse happens ONCE, at construction.
+                cls._default_instance = cls(CongineConfig.from_env())
+            return cls._default_instance
+
+    @staticmethod
+    def _deployment_mode_is_multi_tenant() -> bool:
+        """Cheap single-variable topology probe for :meth:`get_default`."""
+        return CongineConfig.deployment_mode_from_env() is DeploymentMode.MULTI_TENANT
 
     @classmethod
     def for_tenant(
@@ -122,6 +138,9 @@ class ServiceContainer:
         :func:`weakref.finalize`) once it becomes unreferenced. Teardown never runs
         while ``_tenant_lock`` is held, so one eviction cannot stall other tenants'
         lookups (audit P0-1 / H-1).
+
+        Since audit Q5 every container arms that finalizer at construction, so the
+        eviction-time call below is an idempotent no-op retained for clarity.
         """
         key = f"{tenant_id}|{project_id}"
 
@@ -159,7 +178,8 @@ class ServiceContainer:
                 evicted_key = next(iter(cls._tenant_registry))
                 oldest_container = cls._tenant_registry.pop(evicted_key)
                 cls._evicted_total += 1
-                # Cheap: registers a weakref.finalize; performs NO teardown now.
+                # No-op since audit Q5 (armed at construction); kept because the
+                # eviction path is where the guarantee actually matters.
                 oldest_container._arm_deferred_teardown()
 
             container = cls(config)
@@ -247,14 +267,14 @@ class ServiceContainer:
                 contracts_dir=config.local_contracts_dir,
                 logger=self.logger,
                 max_contract_files=config.max_contract_files,
-                max_file_bytes=config.max_schema_bytes,
+                max_file_bytes=config.max_contract_file_bytes,
             )
         elif config.contract_source == "file" and config.contracts_dir is not None:
             self.contract_repository = FileContractRepository(
                 contracts_dir=config.contracts_dir,
                 logger=self.logger,
                 max_contract_files=config.max_contract_files,
-                max_file_bytes=config.max_schema_bytes,
+                max_file_bytes=config.max_contract_file_bytes,
             )
         else:
             self.contract_repository = HttpContractRepository(config, self.logger)
@@ -317,6 +337,7 @@ class ServiceContainer:
             cache_ttl_seconds=config.cache_ttl_seconds,
             circuit_breaker=self.circuit_breaker,
             boot_lock_path=boot_lock_path,
+            semantic_validation_enabled=config.semantic_validation_enabled,
         )
 
         # Standalone file mode needs no periodic re-sync daemon; leave the worker
@@ -333,6 +354,18 @@ class ServiceContainer:
                 start_worker=False,
             )
 
+        # Arm deferred teardown for EVERY container, not only evicted ones
+        # (audit Q5). Construction may already have started the cache sweeper and
+        # the telemetry drain thread; a container that is simply dropped — never
+        # registered, never evicted, never closed — previously leaked both for
+        # the life of the process, because the finalizer was armed only on the
+        # eviction path. Arming here makes every container self-cleaning.
+        #
+        # Must be the LAST statement: the finalizer captures the sub-components,
+        # so they all have to exist. A failure earlier in __init__ still leaks
+        # (nothing is returned to close), which is tracked separately.
+        self._arm_deferred_teardown()
+
     @classmethod
     def from_env(cls) -> "ServiceContainer":
         """Build a container from environment-derived configuration.
@@ -343,6 +376,12 @@ class ServiceContainer:
         return cls(CongineConfig.from_env())
 
     def bootstrap(self) -> int:
+        """Prime the schema cache, then optionally start the periodic sync worker.
+
+        Refuses to run inside a running event loop (audit L6): the sync path
+        drives the fetch with :func:`asyncio.run`, which would otherwise raise a
+        far less actionable error deep in the call stack.
+        """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -367,9 +406,15 @@ class ServiceContainer:
             self.sync_worker.start()
 
     def record_drift_sample(self, value: float) -> None:
+        """Feed one observation into the drift reference window (audit M1).
+
+        Drift is an opt-in *library capability*, not an automatic pipeline: no
+        validation outcome reaches the engine unless a host calls this.
+        """
         self.drift_engine.add_reference(value)
 
     def evaluate_drift(self, current_samples: Sequence[float]) -> "DriftResult":
+        """Run the drift test and publish a ``__drift__`` event on detection (audit M1)."""
         try:
             result = self.drift_engine.detect(current_samples)
         except ImportError as exc:
@@ -402,6 +447,12 @@ class ServiceContainer:
         return result
 
     def health(self) -> Dict[str, Any]:
+        """Aggregate one operational snapshot across every component (audit L2).
+
+        Cheap and non-blocking — each component contributes a counter read, never
+        I/O. ``dropped_total`` is probed rather than required: it is the one
+        optional member of the event-bus surface (audit Q8).
+        """
         dropped_total = getattr(self.event_bus, "dropped_total", None)
         return {
             "cache_entries": self.schema_storage.size(),
@@ -419,10 +470,18 @@ class ServiceContainer:
         }
 
     def _arm_deferred_teardown(self) -> None:
-        """Schedule bounded teardown for when this (evicted) container is no longer
-        referenced. Cheap and non-blocking: registers a :func:`weakref.finalize` and
-        performs NO teardown now. The finalizer captures the sub-components (never
-        ``self``) so it cannot keep the container alive."""
+        """Schedule bounded teardown for when this container is no longer referenced.
+
+        Called at the end of :meth:`__init__` for every container (audit Q5), and
+        again — idempotently — when a container is evicted from the tenant
+        registry. Cheap and non-blocking: registers a :func:`weakref.finalize`
+        and performs NO teardown now, which is what makes it safe to call while
+        ``_tenant_lock`` is held.
+
+        The finalizer captures the sub-components (never ``self``) so it cannot
+        keep the container alive, and :meth:`close` detaches it so an explicitly
+        closed container never tears down twice.
+        """
         with self._close_lock:
             if self._closed or self._finalizer is not None:
                 return

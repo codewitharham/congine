@@ -11,8 +11,10 @@ from congine_core.ports import (
     IContractRepository,
     IEventBus,
     ILogger,
+    IObservable,
     ISchemaStorage,
     ISemanticValidator,
+    IStoppable,
     IValidationRunner,
 )
 
@@ -89,6 +91,8 @@ __all__ = [
     "ISemanticValidator",
     "IValidationRunner",
     "ICircuitBreaker",
+    "IStoppable",
+    "IObservable",
     # Domain
     "BreachDetail",
     "ValidationResult",

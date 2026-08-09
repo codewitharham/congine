@@ -134,12 +134,35 @@ features import lazily and raise/skip when their extra is absent:
   `FakeEventBus`, `FakeSchemaStorage`, `ImmediateTimer`, `FakeContractRepository`)
   that satisfy L1 protocols **without** importing or subclassing them. Prefer these
   over mocks. `asyncio_mode = "auto"` — async tests need no marker.
-- ruff `target-version = py310` is pinned to the supported floor; do not introduce
-  3.11+ syntax. `from __future__ import annotations` is used throughout.
+- **Python floor is 3.11**, declared in exactly four places that must agree
+  (audit Q6): `requires-python` in `pyproject.toml`, the `Programming Language`
+  classifiers, ruff `target-version = "py311"`, and the CI matrix in
+  `.github/workflows/ci.yml`. Do not introduce 3.12+ syntax.
+  `from __future__ import annotations` is used throughout.
 - Adding a `CongineConfig` field is a 4-touch change: the frozen dataclass field,
   the `from_env()` reader (`CONGINE_*`), the `ServiceContainer` wiring (per the
   Wiring rule above), and the **README config-reference table** — that table is the
-  canonical, user-facing config doc and is easy to leave stale.
-- Code comments reference audit IDs (e.g. `audit M5`, `H3`, `D-4`, `FIX-02`) from
-  the workspace-root audit docs (`phase0-congine-newAudit.md`,
-  `phase0-congine-postSessionAudit.md`) — preserve these when editing nearby code.
+  canonical, user-facing config doc and is easy to leave stale. All four are now
+  enforced: `tests/unit/test_config_wiring.py` guards the wiring and
+  `tests/unit/test_readme_config_table.py` fails when a field is undocumented,
+  misdocumented, or documented but nonexistent (audit Q7).
+- **Every path that writes a schema into `ISchemaStorage` must run the
+  unenforced-keyword scan** (`domain.schema_vocabulary.find_unenforced_keywords`)
+  and surface the result. It is the only signal a user gets that part of their
+  contract is decorative, and each new loader that forgets silently reopens the
+  false-safety foot-gun. Enforced by
+  `tests/unit/test_schema_vocabulary.py::test_every_schema_writer_scans_for_unenforced_keywords`
+  (audit P0-2 / Q4).
+- **Ports declare their full surface, including lifecycle.** `ports/lifecycle.py`
+  holds the two cross-cutting seams (`IStoppable`, `IObservable`) that
+  `ISchemaStorage` and `IValidationRunner` compose; `IEventBus` declares its own
+  widened `stop(drain=...)`. If `ServiceContainer` calls a method on a component,
+  that method belongs on the port — a port that under-declares makes a faithful
+  implementation crash in `close()`/`health()` (audit F-15 / Q8).
+- **Audit-ID annotations are maintained, not archival** (audit Q12). Code comments
+  reference audit IDs (`audit M5`, `H3`, `D-4`, `FIX-02`, `P0-1`, `Q7`, …).
+  `docs/architecture/AUDIT_ID_INDEX.md` is the canonical index and **must be
+  updated in the same change** that introduces or closes an ID; annotate the code
+  you touch with the ID that motivated the change. Definitions live in
+  `docs/audits/PHASE0_AUDIT_AND_HEALTH.md` (F-series) and
+  `docs/architecture/OPEN_QUESTIONS.md` (Q-series).

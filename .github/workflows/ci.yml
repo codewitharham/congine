@@ -23,7 +23,9 @@ concurrency:
 env:
   NODE_VERSION: "20"
   PYTHON_VERSION: "3.13"
-  PYTHON_MIN_VERSION: "3.10"
+  # Must match `requires-python` and ruff `target-version` in
+  # libs/congine-sdk/pyproject.toml (audit Q6).
+  PYTHON_MIN_VERSION: "3.11"
   UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.uv-python
 
 jobs:
@@ -62,7 +64,9 @@ jobs:
 
       - name: Set matrix for Python versions
         id: set-matrix
-        run: echo "versions=['3.10','3.11','3.12','3.13']" >> $GITHUB_OUTPUT
+        # 3.10 removed: `requires-python = ">=3.11"` means uv cannot even resolve
+        # the package there, so the 3.10 leg could never have passed (audit Q6).
+        run: echo "versions=['3.11','3.12','3.13']" >> $GITHUB_OUTPUT
 
   # Job 2: Install & Cache Dependencies
   setup-dependencies:

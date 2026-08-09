@@ -67,6 +67,7 @@ Phase 0 is COMPLETE when ALL of the following are true:
   crashes live requests with `RuntimeError: cannot schedule new futures after shutdown`.
 
 ### TASK P0-2: Warn on unenforced schema keywords (kill the false-safety foot-gun)
+- **Status:** ✅ **DONE (2026-07-20).** New pure L2 module `domain/schema_vocabulary.py` mirrors the rule-engine vocabulary (allowlist, not denylist) and returns the `field.keyword` paths it won't enforce. `SyncContractsUseCase` gained a `semantic_validation_enabled` param (wired from config); `_prime_cache` emits **one** de-duplicated WARNING per `(contract_id, schema-hash)` naming the unenforced paths, skipped when semantic validation is on, wrapped so it can never break priming. Enforcement/caching are byte-identical; scan runs only at load. Also detects unrecognised/union `type` values (E1). 20 new tests (incl. anti-drift vs `_extract_params`). Full suite 293 passed / 1 skipped, no regressions.
 - **Rationale:** closes **F-2**; satisfies DoD #10. Highest-leverage correctness item for real users.
 - **Severity:** MEDIUM.
 - **Files:** `src/congine_core/usecases/sync_contracts_usecase.py` (`_prime_cache`, `:239-252`); read-only
@@ -215,7 +216,7 @@ guarantees still hold (§6 of the audit).
 **All must be green before any MCP work begins.** If any is red, MCP does not start.
 
 - [x] **G1** P0-1 done: `test_container_tenant_lru.py` passes — eviction never disables a live container and returns promptly. *(HIGH)* ✅ 2026-07-20
-- [ ] **G2** P0-2 done: unenforced-keyword WARNING fires exactly once per offending contract under default config.
+- [x] **G2** P0-2 done: unenforced-keyword WARNING fires exactly once per offending contract under default config. ✅ 2026-07-20
 - [ ] **G3** P0-3 done: single 3.11 floor; `uv pip install --python 3.10` fails *by design and by docs*; no 3.10 in CI matrix; classifiers/ruff/CLAUDE.md agree.
 - [ ] **G4** Full suite green on Python **3.11**; hot-path-critical modules ≥ 90% branch; eviction branch (`dependency_injection.py:110-114`) exercised.
 - [ ] **G5** `ruff check` + `ruff format --check` + `mypy` all exit 0 across `libs/congine-sdk` (incl. examples); or every remaining exception documented.

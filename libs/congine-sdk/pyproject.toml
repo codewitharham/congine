@@ -15,7 +15,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -63,10 +62,14 @@ package = true
 
 
 [tool.ruff]
-# Pin the target version to the supported floor so format/check do not rewrite
-# Python 3.14-only syntax (e.g. PEP 758 unparenthesised `except A, B:`) that
-# would break collection on 3.10–3.13 — the declared `requires-python` floor.
-target-version = "py310"
+# Pin the target version to the supported floor (`requires-python = ">=3.11"`)
+# so format/check do not rewrite newer-only syntax (e.g. PEP 758 unparenthesised
+# `except A, B:`) that would break collection on 3.11-3.13.
+#
+# The floor is 3.11 in exactly four places and they must agree (audit Q6):
+# `requires-python` above, the classifiers above, this target-version, and the
+# CI matrix. They previously disagreed four ways.
+target-version = "py311"
 extend-exclude = ["src/congine_sdk.egg-info"]
 
 [tool.pytest.ini_options]

@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 from congine_core.exceptions import CongineConfigurationError
 from congine_core.security_limits import (
+    DEFAULT_MAX_CONTRACT_FILE_BYTES,
     DEFAULT_MAX_CONTRACT_FILES,
     DEFAULT_MAX_HTTP_RESPONSE_BYTES,
     DEFAULT_MAX_PAYLOAD_BYTES,
@@ -30,9 +31,35 @@ from congine_core.security_limits import (
 # Exact loopback hostnames exempt from HTTPS/credential policy (FIX-01).
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
+#: Control-plane URL per region (audit Q1). ``region`` used to be a validated,
+#: documented, *unread* field — a user setting ``CONGINE_REGION=eu`` for data
+#: residency got no routing change and no warning. It now selects the default
+#: control plane.
+#:
+#: Applied **only** when ``CONGINE_REGION`` is set explicitly and
+#: ``CONGINE_BASE_URL`` is not, so local development (which sets neither) keeps
+#: the loopback default and an explicit ``base_url`` always wins.
+#:
+#: .. important:: These hostnames are the single place regional endpoints are
+#:    declared. Confirm them against the deployed control plane before relying
+#:    on region-based routing in production.
+_REGION_BASE_URLS: "dict[str, str]" = {
+    "us": "https://api.us.congine.dev",
+    "eu": "https://api.eu.congine.dev",
+    "apac": "https://api.apac.congine.dev",
+}
+
+#: Default control plane when neither ``CONGINE_BASE_URL`` nor ``CONGINE_REGION``
+#: is set — i.e. local development.
+_DEFAULT_LOCAL_BASE_URL = "http://localhost:8080"
+
 
 class Region(str, Enum):
     """Deployment region for the Congine control plane.
+
+    Selects the default ``base_url`` via :data:`_REGION_BASE_URLS` when
+    ``CONGINE_BASE_URL`` is not set (audit Q1). An explicit ``base_url`` always
+    takes precedence, so setting a region never overrides a deliberate endpoint.
 
     Inherits from :class:`str` so members compare and serialize ergonomically.
     """
@@ -40,6 +67,11 @@ class Region(str, Enum):
     US = "us"  # Virginia
     EU = "eu"  # Frankfurt (GDPR)
     APAC = "apac"  # Singapore
+
+    @property
+    def default_base_url(self) -> str:
+        """Control-plane URL for this region."""
+        return _REGION_BASE_URLS[self.value]
 
 
 class FailMode(str, Enum):
@@ -140,13 +172,48 @@ class CongineConfig:
 
     # --- Input bounds (FIX-06) ------------------------------------------- #
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
+    # Caps a *cached schema* on the validation hot path. Distinct from
+    # max_contract_file_bytes, which caps a *file read* at load (audit Q11).
     max_schema_bytes: int = DEFAULT_MAX_SCHEMA_BYTES
     max_contract_files: int = DEFAULT_MAX_CONTRACT_FILES
+    max_contract_file_bytes: int = DEFAULT_MAX_CONTRACT_FILE_BYTES
     max_stream_buffer_chars: int = DEFAULT_MAX_STREAM_BUFFER_CHARS
     max_http_response_bytes: int = DEFAULT_MAX_HTTP_RESPONSE_BYTES
 
     # --- Container lifecycle (FIX-14) ------------------------------------ #
     start_background_services: bool = True
+
+    @staticmethod
+    def deployment_mode_from_env() -> DeploymentMode:
+        """Read **only** ``CONGINE_DEPLOYMENT_MODE`` from the environment.
+
+        Split out of :meth:`from_env` so a caller that needs just the topology —
+        notably :meth:`ServiceContainer.get_default`, which must refuse to serve
+        a shared singleton in ``multi_tenant`` mode — can check it without
+        parsing and validating all ~47 fields on every call (audit Q10).
+        """
+        raw = os.getenv("CONGINE_DEPLOYMENT_MODE", "single_tenant")
+        try:
+            return DeploymentMode(raw)
+        except ValueError as exc:
+            raise CongineConfigurationError(
+                f"Invalid CONGINE_DEPLOYMENT_MODE: {raw!r}"
+            ) from exc
+
+    @staticmethod
+    def base_url_from_env(region: Region) -> str:
+        """Resolve the control-plane URL for the current environment (audit Q1).
+
+        Precedence: an explicit ``CONGINE_BASE_URL`` always wins; otherwise an
+        explicitly-set ``CONGINE_REGION`` selects its regional endpoint;
+        otherwise the loopback default, so local development is unaffected.
+        """
+        explicit = os.getenv("CONGINE_BASE_URL")
+        if explicit:
+            return explicit
+        if os.getenv("CONGINE_REGION"):
+            return region.default_base_url
+        return _DEFAULT_LOCAL_BASE_URL
 
     @classmethod
     def from_env(cls) -> "CongineConfig":
@@ -163,18 +230,10 @@ class CongineConfig:
             raise CongineConfigurationError(
                 f"Invalid CONGINE_FAIL_MODE: {os.getenv('CONGINE_FAIL_MODE')!r}"
             ) from exc
-        try:
-            deployment_mode = DeploymentMode(
-                os.getenv("CONGINE_DEPLOYMENT_MODE", "single_tenant")
-            )
-        except ValueError as exc:
-            raise CongineConfigurationError(
-                f"Invalid CONGINE_DEPLOYMENT_MODE: "
-                f"{os.getenv('CONGINE_DEPLOYMENT_MODE')!r}"
-            ) from exc
+        deployment_mode = cls.deployment_mode_from_env()
 
         config = cls(
-            base_url=os.getenv("CONGINE_BASE_URL", "http://localhost:8080"),
+            base_url=cls.base_url_from_env(region),
             api_key=os.getenv("CONGINE_API_KEY"),
             project_id=os.getenv("CONGINE_PROJECT_ID"),
             tenant_id=os.getenv("CONGINE_TENANT_ID"),
@@ -240,6 +299,9 @@ class CongineConfig:
             ),
             max_contract_files=cls._env_int(
                 "CONGINE_MAX_CONTRACT_FILES", DEFAULT_MAX_CONTRACT_FILES
+            ),
+            max_contract_file_bytes=cls._env_int(
+                "CONGINE_MAX_CONTRACT_FILE_BYTES", DEFAULT_MAX_CONTRACT_FILE_BYTES
             ),
             max_stream_buffer_chars=cls._env_int(
                 "CONGINE_MAX_STREAM_BUFFER_CHARS", DEFAULT_MAX_STREAM_BUFFER_CHARS

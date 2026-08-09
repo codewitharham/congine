@@ -40,7 +40,13 @@ class FakeLogger:
 
 
 class FakeEventBus:
-    """Capturing :class:`IEventBus` test double."""
+    """Capturing :class:`IEventBus` test double.
+
+    Implements the port's full declared surface (``publish``, ``queue_depth``,
+    ``stop``) so it can stand in wherever the container uses a real bus.
+    ``dropped_total`` is deliberately omitted — it is the port's one optional
+    member, and leaving it out keeps the container's ``getattr`` probe honest.
+    """
 
     def __init__(self) -> None:
         self.published: List[TelemetryEvent] = []
@@ -76,9 +82,22 @@ class FakeSchemaStorage:
     def exists(self, contract_id: str) -> bool:
         return contract_id in self._store
 
+    def size(self) -> int:
+        """Part of the port surface the container reports in health()."""
+        return len(self._store)
+
+    def stop(self) -> None:
+        """No-op: nothing to tear down (no sweeper thread)."""
+
 
 class ImmediateTimer:
-    """:class:`ValidationTimer` stand-in that runs *func* inline (no threads)."""
+    """:class:`IValidationRunner` stand-in that runs *func* inline (no threads).
+
+    Deliberately partial: it implements only ``run_with_timeout``, because the
+    use-case tests that inject it never touch the rest of the port. Use
+    ``FakeRunner`` in ``tests/test_validation_runner_port.py`` for a double that
+    satisfies the full protocol.
+    """
 
     def run_with_timeout(self, func: Any, timeout_ms: int) -> Any:
         return func()

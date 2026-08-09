@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import random
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
+from congine_core.domain.schema_vocabulary import find_unenforced_keywords
 from congine_core.exceptions import CongineSyncError
 from congine_core.ports.contract_repository import IContractRepository
 from congine_core.ports.logger import ILogger
@@ -33,6 +36,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from congine_core.ports.circuit_breaker import ICircuitBreaker
 
 
+# Bound on the per-process de-dup set for the unenforced-keyword diagnostic
+# (audit P0-2), so it cannot grow without limit across background re-syncs.
+_MAX_WARNED_CONTRACTS = 4096
+
+
 class SyncContractsUseCase:
     """Prime the schema cache from active contracts (online, snapshot-safe)."""
 
@@ -44,6 +52,7 @@ class SyncContractsUseCase:
         cache_ttl_seconds: int = 300,
         circuit_breaker: "Optional[ICircuitBreaker]" = None,
         boot_lock_path: Optional[str] = None,
+        semantic_validation_enabled: bool = False,
     ) -> None:
         """Constructor injection of all collaborators.
 
@@ -59,6 +68,11 @@ class SyncContractsUseCase:
                 used by :meth:`sync_once_single_flight`. ``None`` disables
                 single-flight coordination (the method degrades to a regular
                 fetch).
+            semantic_validation_enabled: When ``False`` (default), primed
+                contracts are scanned at load time and a WARNING is emitted for
+                any schema keyword the rule engine silently ignores (audit P0-2).
+                When ``True``, full JSON Schema validation enforces those
+                keywords, so the scan is skipped.
         """
         self.schema_storage = schema_storage
         self.contract_repository = contract_repository
@@ -66,6 +80,10 @@ class SyncContractsUseCase:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.circuit_breaker = circuit_breaker
         self.boot_lock_path = boot_lock_path
+        self.semantic_validation_enabled = semantic_validation_enabled
+        # Per-process de-dup for the unenforced-keyword diagnostic, keyed on
+        # (contract_id, schema fingerprint) so a changed contract warns again.
+        self._warned_unenforced: set[tuple[str, str]] = set()
 
     def sync_once(self) -> int:
         """Run one full sync pass and return the number of contracts loaded.
@@ -249,4 +267,49 @@ class SyncContractsUseCase:
             if contract_id and schema is not None:
                 self.schema_storage.put(contract_id, schema, self.cache_ttl_seconds)
                 loaded += 1
+                self._warn_unenforced_keywords(contract_id, schema)
         return loaded
+
+    def _warn_unenforced_keywords(self, contract_id: str, schema: Any) -> None:
+        """Emit one WARNING per contract whose schema uses keywords the rule engine
+        silently ignores (audit P0-2). Load-time diagnostic only — it never changes
+        what is cached or enforced, and never raises out of priming.
+
+        Skipped entirely when semantic validation is on (those keywords are then
+        enforced by the JSON Schema validator). De-duplicated per
+        ``(contract_id, schema fingerprint)`` so a background re-sync does not
+        repeat the warning every ``sync_interval_seconds``.
+        """
+        if self.semantic_validation_enabled:
+            return
+        try:
+            unenforced = find_unenforced_keywords(schema)
+            if not unenforced:
+                return
+            key = (contract_id, self._schema_fingerprint(schema))
+            if key in self._warned_unenforced:
+                return
+            if len(self._warned_unenforced) >= _MAX_WARNED_CONTRACTS:
+                self._warned_unenforced.clear()
+            self._warned_unenforced.add(key)
+            self.logger.warning(
+                "Contract uses schema keywords the rule engine does not enforce",
+                contract_id=contract_id,
+                unenforced=unenforced,
+                hint="set CONGINE_SEMANTIC_VALIDATION=true to enforce full JSON Schema",
+            )
+        except Exception as exc:  # a diagnostic must never break cache priming
+            self.logger.debug(
+                "Unenforced-keyword scan failed",
+                contract_id=contract_id,
+                error_type=type(exc).__name__,
+            )
+
+    @staticmethod
+    def _schema_fingerprint(schema: Any) -> str:
+        """Stable per-process fingerprint of a schema for warning de-duplication."""
+        try:
+            canonical = json.dumps(schema, sort_keys=True, default=str)
+        except Exception:
+            canonical = repr(schema)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

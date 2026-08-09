@@ -24,7 +24,11 @@ import time
 
 import pytest
 
-from congine_core.adapters.dependency_injection import ServiceContainer
+from congine_core.adapters.dependency_injection import (
+    ServiceContainer,
+    _teardown_components,
+)
+from congine_core.config import CongineConfig
 
 
 @pytest.fixture(autouse=True)
@@ -156,36 +160,82 @@ def test_evicted_container_explicit_close_detaches_finalizer() -> None:
 
 def test_evicted_unreferenced_container_is_torn_down() -> None:
     """No leak: once the last reference to an evicted container drops, its deferred
-    teardown fires and stops its components with ``drain=False`` (bounded)."""
-    observed: dict[str, object] = {"stopped": False, "drain": None}
+    teardown fires and genuinely stops its components.
 
-    class _SpyBus:
-        def publish(self, event: object) -> None: ...
-        def stop(self, drain: bool = True) -> None:
-            observed["stopped"] = True
-            observed["drain"] = drain
-
-        def queue_depth(self) -> int:
-            return 0
-
-        def dropped_total(self) -> int:
-            return 0
-
+    Observes the container's *real* components rather than substituting a spy.
+    Since audit Q5 the finalizer is armed in ``__init__``, so it captures the
+    components the container constructed — reassigning ``container.event_bus``
+    afterwards would not be seen by it.
+    """
     c0 = ServiceContainer.for_tenant("t0", "p")
-    c0.event_bus = _SpyBus()  # observe the deferred teardown
-    ServiceContainer.for_tenant("t1", "p")
-    ServiceContainer.for_tenant("t2", "p")  # full
-    ServiceContainer.for_tenant("t3", "p")  # evicts t0 -> arms finalizer w/ the spy
-
+    # Hold the components (not the container) so teardown is observable after
+    # the container itself has been collected.
+    storage = c0.schema_storage
+    executor = c0.validation_executor
     finalizer = c0._finalizer
     assert finalizer is not None and finalizer.alive
+
+    ServiceContainer.for_tenant("t1", "p")
+    ServiceContainer.for_tenant("t2", "p")  # full
+    ServiceContainer.for_tenant("t3", "p")  # evicts t0
+
+    assert "t0|p" not in ServiceContainer._tenant_registry
+    assert finalizer.alive  # eviction alone must NOT tear anything down
 
     del c0
     gc.collect()
 
     assert not finalizer.alive  # the finalizer fired
-    assert observed["stopped"] is True  # deferred teardown actually ran
-    assert observed["drain"] is False  # bounded, non-draining stop
+    assert storage._stop_event.is_set()  # cache sweeper signalled to stop
+    with pytest.raises(RuntimeError):  # pool genuinely shut down
+        executor.thread_pool.submit(lambda: None)
+
+
+def test_teardown_is_bounded_and_error_suppressing() -> None:
+    """The deferred teardown must never drain and never raise.
+
+    It runs on an arbitrary thread during garbage collection, so a slow control
+    plane must not stall it (``drain=False``) and one failing component must not
+    prevent the others from stopping or let an exception escape a finalizer.
+    """
+    seen: dict[str, object] = {}
+
+    class _RaisingStorage:
+        def stop(self) -> None:
+            raise RuntimeError("storage teardown exploded")
+
+    class _Bus:
+        def stop(self, drain: bool = True) -> None:
+            seen["drain"] = drain
+
+    class _Executor:
+        def shutdown(self, wait: bool = False) -> None:
+            seen["wait"] = wait
+
+    _teardown_components(None, _RaisingStorage(), _Bus(), _Executor())
+
+    assert seen["drain"] is False  # bounded: never waits on the control plane
+    assert seen["wait"] is False  # never blocks on in-flight validations
+    # ...and the raising component did not stop the others or escape.
+
+
+def test_plain_container_arms_teardown_at_construction() -> None:
+    """Audit Q5: every container self-cleans, not only evicted ones.
+
+    A container that is never registered, never evicted and never closed used to
+    arm no finalizer at all, leaking its sweeper and drain threads for the life
+    of the process.
+    """
+    container = ServiceContainer(CongineConfig.from_env())
+    storage = container.schema_storage
+    finalizer = container._finalizer
+    assert finalizer is not None and finalizer.alive
+
+    del container
+    gc.collect()
+
+    assert not finalizer.alive
+    assert storage._stop_event.is_set()
 
 
 def test_eviction_counter_increments() -> None:
