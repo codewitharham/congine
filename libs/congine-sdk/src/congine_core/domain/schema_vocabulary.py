@@ -76,6 +76,69 @@ RECOGNISED_TYPE_NAMES: frozenset[str] = frozenset(
     {"string", "number", "integer", "boolean", "object", "array", "null"}
 )
 
+# Every keyword the *native* rule engine enforces. Contract admission uses this
+# to answer "will any active evaluator execute this clause?" (audit P0-04).
+NATIVE_ENFORCED_KEYWORDS: frozenset[str] = (
+    ENFORCED_TOP_LEVEL_KEYWORDS | ENFORCED_PROPERTY_KEYWORDS
+)
+
+# Keywords the JSON Schema semantic evaluator enforces when
+# ``CONGINE_SEMANTIC_VALIDATION=true``. Like everything else in this module it is
+# a deliberate *mirror*, not something derived from the L4 concrete — an L2
+# module may not import infrastructure.
+#
+# Scope note (audit P0-04): a pragmatic P0 capability list, not a general
+# evaluator-capability registry. It exists so admission can distinguish "no
+# evaluator will ever execute this clause" from "an evaluator you enabled will".
+#
+# ``format`` is deliberately EXCLUDED: the semantic validator asserts formats
+# only when ``semantic_format_checking`` is *additionally* enabled, so listing it
+# unconditionally would be precisely the false-safety claim admission exists to
+# prevent. The caller adds it when that flag is on.
+SEMANTIC_ENFORCED_KEYWORDS: frozenset[str] = frozenset(
+    {
+        # string
+        "minLength",
+        "maxLength",
+        "contentEncoding",
+        "contentMediaType",
+        # numeric
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        # array
+        "items",
+        "prefixItems",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "contains",
+        "minContains",
+        "maxContains",
+        # object
+        "additionalProperties",
+        "minProperties",
+        "maxProperties",
+        "patternProperties",
+        "propertyNames",
+        "dependentRequired",
+        "dependentSchemas",
+        # composition / value
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "if",
+        "then",
+        "else",
+        "const",
+        # references
+        "$ref",
+        "$defs",
+        "definitions",
+    }
+)
+
 #: Field segment used for top-level keywords, matching the ``field="<root>"``
 #: convention already used in ``LocalValidator.validate``.
 _ROOT = "<root>"
@@ -89,7 +152,10 @@ __all__ = [
     "ENFORCED_PROPERTY_KEYWORDS",
     "IGNORABLE_METADATA_KEYWORDS",
     "RECOGNISED_TYPE_NAMES",
+    "NATIVE_ENFORCED_KEYWORDS",
+    "SEMANTIC_ENFORCED_KEYWORDS",
     "find_unenforced_keywords",
+    "type_is_enforceable",
 ]
 
 
@@ -108,6 +174,12 @@ def _type_is_enforceable(value: Any) -> bool:
             for member in value
         )
     return isinstance(value, str) and value in RECOGNISED_TYPE_NAMES
+
+
+#: Public alias so :mod:`congine_core.domain.contract_admission` can compose this
+#: judgement instead of duplicating it. The private name is retained because this
+#: module's own internals use it.
+type_is_enforceable = _type_is_enforceable
 
 
 def find_unenforced_keywords(schema: Mapping[str, Any]) -> list[str]:

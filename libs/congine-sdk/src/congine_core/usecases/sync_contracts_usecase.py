@@ -18,7 +18,15 @@ import json
 import random
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
-from congine_core.domain.schema_vocabulary import find_unenforced_keywords
+from congine_core.domain.contract_admission import (
+    ContractAdmissionMode,
+    admit_contract,
+)
+from congine_core.domain.schema_vocabulary import (
+    NATIVE_ENFORCED_KEYWORDS,
+    SEMANTIC_ENFORCED_KEYWORDS,
+    find_unenforced_keywords,
+)
 from congine_core.exceptions import CongineSyncError
 from congine_core.ports.contract_repository import IContractRepository
 from congine_core.ports.logger import ILogger
@@ -53,6 +61,8 @@ class SyncContractsUseCase:
         circuit_breaker: "Optional[ICircuitBreaker]" = None,
         boot_lock_path: Optional[str] = None,
         semantic_validation_enabled: bool = False,
+        semantic_format_checking: bool = False,
+        admission_mode: ContractAdmissionMode = ContractAdmissionMode.STRICT,
     ) -> None:
         """Constructor injection of all collaborators.
 
@@ -73,6 +83,13 @@ class SyncContractsUseCase:
                 any schema keyword the rule engine silently ignores (audit P0-2).
                 When ``True``, full JSON Schema validation enforces those
                 keywords, so the scan is skipped.
+            semantic_format_checking: Whether the semantic evaluator asserts
+                ``format``. Only meaningful when *semantic_validation_enabled*
+                is ``True``; it widens the enforced-keyword capability set.
+            admission_mode: How strictly contracts are admitted (audit
+                P0-03/P0-04). ``WARN`` relaxes *compatibility* advisories only —
+                it can never admit a contract whose meaning CONGINE cannot
+                determine.
         """
         self.schema_storage = schema_storage
         self.contract_repository = contract_repository
@@ -81,9 +98,26 @@ class SyncContractsUseCase:
         self.circuit_breaker = circuit_breaker
         self.boot_lock_path = boot_lock_path
         self.semantic_validation_enabled = semantic_validation_enabled
+        self.admission_mode = admission_mode
+        # The capability set admission judges against: which keywords will some
+        # *currently active* evaluator actually execute. Composed here, where the
+        # wired evaluator configuration is known, rather than passed as an
+        # "is semantic validation on?" flag — the question admission needs
+        # answered is per-keyword, and will differ per evaluator as more are
+        # added (audit P0-04).
+        enforced = set(NATIVE_ENFORCED_KEYWORDS)
+        if semantic_validation_enabled:
+            enforced |= SEMANTIC_ENFORCED_KEYWORDS
+            if semantic_format_checking:
+                enforced.add("format")
+        self._enforced_keywords: frozenset[str] = frozenset(enforced)
         # Per-process de-dup for the unenforced-keyword diagnostic, keyed on
         # (contract_id, schema fingerprint) so a changed contract warns again.
         self._warned_unenforced: set[tuple[str, str]] = set()
+        # Admission observability (audit P0-03/P0-04). Exposed through the
+        # declared :meth:`admission_status` surface, never read as attributes.
+        self._contracts_rejected_total = 0
+        self._last_admission_failure: Optional[dict[str, Any]] = None
 
     def sync_once(self) -> int:
         """Run one full sync pass and return the number of contracts loaded.
@@ -255,20 +289,133 @@ class SyncContractsUseCase:
         return loaded
 
     def _prime_cache(self, contracts: list[dict[str, Any]]) -> int:
-        """Insert each contract's schema into the cache (each ``put`` atomic).
+        """Admit, then insert each contract's schema into the cache.
 
         Updates keys in place rather than clear-then-refill, so a concurrent
         ``get`` on the validation hot path always observes a coherent cache.
+
+        **Admission is the gate (audit P0-03/P0-04).** A contract whose meaning
+        CONGINE cannot determine is never written, so it cannot become active
+        policy. Two consequences are deliberate:
+
+        - **A rejected update never replaces last-known-good.** Because the write
+          is skipped rather than cleared, a previously admitted version of the
+          same ``contract_id`` keeps serving. Availability is preserved, but the
+          rejected version is never reported as active — it is counted, recorded
+          and logged at ERROR.
+        - **On a cold cache the contract is simply absent**, and the existing
+          fail-closed behaviour turns every guarded call against it into
+          ``CongineContractNotFoundError``. That is intended: refusing to
+          enforce is safer than appearing to enforce.
         """
         loaded = 0
         for contract in contracts:
             contract_id = contract.get("id")
             schema = contract.get("schema")
-            if contract_id and schema is not None:
-                self.schema_storage.put(contract_id, schema, self.cache_ttl_seconds)
-                loaded += 1
-                self._warn_unenforced_keywords(contract_id, schema)
+            if not contract_id or schema is None:
+                continue
+            if not self._admit(contract_id, contract, schema):
+                continue
+            self.schema_storage.put(contract_id, schema, self.cache_ttl_seconds)
+            loaded += 1
+            self._warn_unenforced_keywords(contract_id, schema)
         return loaded
+
+    def _admit(self, contract_id: str, contract: dict[str, Any], schema: Any) -> bool:
+        """Return ``True`` if *schema* may become active policy.
+
+        Never raises: an admission defect must not break a sync pass. If the
+        check itself fails unexpectedly the contract is refused, because an
+        unverified contract is exactly what admission exists to keep out.
+        """
+        try:
+            result = admit_contract(
+                schema,
+                mode=self.admission_mode,
+                enforced_keywords=self._enforced_keywords,
+            )
+        except Exception as exc:  # a defect here must fail closed, not fail open
+            self._record_rejection(
+                contract_id,
+                contract,
+                codes=("admission_error",),
+                detail=f"{type(exc).__name__}",
+            )
+            self.logger.error(
+                "Contract admission check failed; contract refused",
+                contract_id=contract_id,
+                error_type=type(exc).__name__,
+            )
+            return False
+
+        for issue in result.warnings:
+            self.logger.warning(
+                "Contract admission advisory",
+                contract_id=contract_id,
+                code=issue.code,
+                path=issue.path,
+                detail=issue.message,
+            )
+
+        if result.admitted:
+            return True
+
+        errors = result.errors
+        self._record_rejection(
+            contract_id,
+            contract,
+            codes=tuple(sorted({str(i.code) for i in errors})),
+            detail="; ".join(f"{i.path}: {i.message}" for i in errors[:5]),
+        )
+        self.logger.error(
+            "Contract rejected at admission; not activated",
+            contract_id=contract_id,
+            contract_version=contract.get("version"),
+            codes=[str(i.code) for i in errors],
+            paths=[i.path for i in errors],
+            detail="; ".join(f"{i.path}: {i.message}" for i in errors[:5]),
+        )
+        return False
+
+    def _record_rejection(
+        self,
+        contract_id: str,
+        contract: dict[str, Any],
+        *,
+        codes: tuple[str, ...],
+        detail: str,
+    ) -> None:
+        """Update the admission observability counters."""
+        self._contracts_rejected_total += 1
+        self._last_admission_failure = {
+            "contract_id": contract_id,
+            "contract_version": contract.get("version"),
+            "codes": list(codes),
+            "detail": detail,
+        }
+
+    def admission_status(self) -> dict[str, Any]:
+        """Declared, read-only snapshot of contract-admission health.
+
+        This exists so :meth:`ServiceContainer.health` can report refused policy
+        updates **through a declared surface** rather than by reaching into
+        private attributes. That distinction is the whole point of audit P0-01:
+        the composition root consumes declared capabilities, never implementation
+        details, and this hardening pass must not fix one such leak while
+        introducing its successor.
+
+        Operationally it answers a question logs alone answer badly: *"is the old
+        policy still active because the control plane is unreachable, or because
+        a new version arrived and was refused?"* A non-zero
+        ``contracts_rejected_total`` means the latter.
+
+        Cheap and non-blocking — plain counter reads, no I/O.
+        """
+        return {
+            "contracts_rejected_total": self._contracts_rejected_total,
+            "last_admission_failure": self._last_admission_failure,
+            "admission_mode": str(self.admission_mode),
+        }
 
     def _warn_unenforced_keywords(self, contract_id: str, schema: Any) -> None:
         """Emit one WARNING per contract whose schema uses keywords the rule engine

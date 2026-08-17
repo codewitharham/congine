@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import FrozenSet, Optional
 from urllib.parse import urlparse
 
@@ -31,35 +31,45 @@ from congine_core.security_limits import (
 # Exact loopback hostnames exempt from HTTPS/credential policy (FIX-01).
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
-#: Control-plane URL per region (audit Q1). ``region`` used to be a validated,
-#: documented, *unread* field — a user setting ``CONGINE_REGION=eu`` for data
-#: residency got no routing change and no warning. It now selects the default
-#: control plane.
-#:
-#: Applied **only** when ``CONGINE_REGION`` is set explicitly and
-#: ``CONGINE_BASE_URL`` is not, so local development (which sets neither) keeps
-#: the loopback default and an explicit ``base_url`` always wins.
-#:
-#: .. important:: These hostnames are the single place regional endpoints are
-#:    declared. Confirm them against the deployed control plane before relying
-#:    on region-based routing in production.
-_REGION_BASE_URLS: "dict[str, str]" = {
-    "us": "https://api.us.congine.dev",
-    "eu": "https://api.eu.congine.dev",
-    "apac": "https://api.apac.congine.dev",
-}
+# The only accepted boolean spellings (audit P0-07). Deliberately literal: a
+# governance SDK must not guess what "maybe" or "yes please" was meant to mean.
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
-#: Default control plane when neither ``CONGINE_BASE_URL`` nor ``CONGINE_REGION``
-#: is set — i.e. local development.
+#: Default control plane when ``CONGINE_BASE_URL`` is not set — i.e. local
+#: development.
 _DEFAULT_LOCAL_BASE_URL = "http://localhost:8080"
+
+#: Shared default validation deadline, in milliseconds.
+#:
+#: Single source of truth (audit P0-07 / Q17). Both :class:`CongineConfig` and
+#: :class:`ValidateContractUseCase` derive their default from this constant.
+#: They previously disagreed — 100 via configuration, 15 in the use case's own
+#: constructor — so a host that built the use case directly silently ran a
+#: budget almost seven times tighter than the documented one.
+#:
+#: It lives in Layer 0 alongside the configuration it parameterises, which the
+#: use-case layer already imports (:class:`FailMode`); no new dependency edge is
+#: introduced and the reference still points inward.
+DEFAULT_VALIDATION_TIMEOUT_MS = 100
 
 
 class Region(str, Enum):
-    """Deployment region for the Congine control plane.
+    """Deployment region label for the Congine control plane.
 
-    Selects the default ``base_url`` via :data:`_REGION_BASE_URLS` when
-    ``CONGINE_BASE_URL`` is not set (audit Q1). An explicit ``base_url`` always
-    takes precedence, so setting a region never overrides a deliberate endpoint.
+    .. important:: **Region is metadata. It does not select an endpoint.**
+
+       An earlier change (audit Q1) mapped each region to a default
+       ``base_url`` — ``https://api.{us,eu,apac}.congine.dev``. Those hostnames
+       were never confirmed against a deployed control plane, so the mapping
+       could send an API key to an endpoint nobody had verified. It has been
+       **reverted** (audit P0-08): a governance SDK must never infer a
+       credential destination.
+
+       ``CONGINE_BASE_URL`` is now the only thing that selects a control plane.
+       Setting ``CONGINE_REGION`` *without* it is a configuration error rather
+       than a silent fall back to loopback — see
+       :meth:`CongineConfig.base_url_from_env`.
 
     Inherits from :class:`str` so members compare and serialize ergonomically.
     """
@@ -67,11 +77,6 @@ class Region(str, Enum):
     US = "us"  # Virginia
     EU = "eu"  # Frankfurt (GDPR)
     APAC = "apac"  # Singapore
-
-    @property
-    def default_base_url(self) -> str:
-        """Control-plane URL for this region."""
-        return _REGION_BASE_URLS[self.value]
 
 
 class FailMode(str, Enum):
@@ -87,6 +92,72 @@ class DeploymentMode(str, Enum):
 
     SINGLE_TENANT = "single_tenant"
     MULTI_TENANT = "multi_tenant"
+
+
+class ContractAdmissionMode(StrEnum):
+    """How strictly contracts are admitted as active policy (audit P0-03/P0-04).
+
+    :class:`enum.StrEnum`, not ``(str, Enum)`` like the older policy enums beside
+    it. This value is machine-facing — it is reported by
+    ``ServiceContainer.health()`` — and a plain ``(str, Enum)`` renders as
+    ``"ContractAdmissionMode.STRICT"`` under ``str()`` and f-strings while
+    serialising correctly through ``json.dumps``, so a single interpolation on
+    the way to an operator leaks an implementation name. ``StrEnum`` renders as
+    the value on every path. The pre-existing enums are deliberately left alone:
+    changing them would alter output elsewhere and is out of this pass's scope.
+
+    Defined here in Layer 0 beside :class:`FailMode` and :class:`DeploymentMode`
+    because it is an organizational *policy* knob, and because Layer 0 may not
+    import the domain. The admission logic that consumes it lives in
+    :mod:`congine_core.domain.contract_admission`, which imports inward to here.
+
+    .. important:: **``WARN`` relaxes compatibility, never correctness.** It can
+       never admit a contract whose meaning CONGINE cannot determine — unknown
+       types, empty unions, invalid regexes, ambiguous dotted keys, malformed
+       grammar and clauses no active evaluator executes are refused in both
+       modes. See :class:`~congine_core.domain.contract_admission.ContractAdmissionMode`
+       usage notes for why a permissive migration mode would rebuild the exact
+       false-safety failure this boundary removes.
+    """
+
+    STRICT = "strict"
+    WARN = "warn"
+
+
+class ContractSource(StrEnum):
+    """Where contracts are loaded from (audit P0-07).
+
+    Previously an unrestricted string compared against the literal ``"file"``,
+    so ``CONGINE_CONTRACT_SOURCE=files`` — a plausible typo — silently selected
+    the HTTP control plane instead. A typo must never change network topology,
+    so the value is now validated and an unknown one is a configuration error.
+    """
+
+    HTTP = "http"
+    FILE = "file"
+
+
+#: Every enum-backed :class:`CongineConfig` field, normalized centrally by
+#: ``__post_init__`` so a raw wire string can never survive into a runtime
+#: identity check (audit P0-07 closeout).
+#:
+#: Four of these feed ``is`` comparisons in production code — ``fail_mode``
+#: (``validate_contract_usecase``), ``deployment_mode`` (``langchain_handler``),
+#: ``contract_source`` and ``contract_admission`` — where an un-normalized string
+#: silently took the wrong branch. ``region`` carries no branch but is normalized
+#: for consistency, so the rule has no exceptions to remember.
+_ENUM_FIELDS: "dict[str, type[Enum]]" = {
+    "region": Region,
+    "fail_mode": FailMode,
+    "contract_source": ContractSource,
+    "deployment_mode": DeploymentMode,
+    "contract_admission": ContractAdmissionMode,
+}
+
+
+def _accepted(enum_cls: "type[Enum]") -> str:
+    """Render an enum's accepted wire values for an error message."""
+    return ", ".join(sorted(str(m.value) for m in enum_cls))
 
 
 @dataclass(frozen=True)
@@ -105,7 +176,7 @@ class CongineConfig:
     region: Region
 
     # --- Validation ------------------------------------------------------- #
-    validation_timeout_ms: int = 100
+    validation_timeout_ms: int = DEFAULT_VALIDATION_TIMEOUT_MS
     fail_mode: FailMode = FailMode.DEGRADE
 
     # --- Cache ------------------------------------------------------------ #
@@ -132,7 +203,7 @@ class CongineConfig:
     validation_max_pending: int = 10
 
     # --- Contract source (local-first / GitOps) -------------------------- #
-    contract_source: str = "http"
+    contract_source: ContractSource = ContractSource.HTTP
     contracts_dir: Optional[str] = None
     # Explicit standalone / offline-first switch: when set, the container binds a
     # FileContractRepository to this directory and allocates NO background sync
@@ -183,6 +254,60 @@ class CongineConfig:
     # --- Container lifecycle (FIX-14) ------------------------------------ #
     start_background_services: bool = True
 
+    # --- Contract admission (audit P0-03 / P0-04) ------------------------ #
+    # STRICT refuses any contract whose meaning CONGINE cannot determine. WARN
+    # adds migration advisories for enforceable legacy constructs; it cannot
+    # admit an invalid or unenforceable contract.
+    contract_admission: ContractAdmissionMode = ContractAdmissionMode.STRICT
+
+    def __post_init__(self) -> None:
+        """Normalize, then validate — the single instance-level boundary.
+
+        Configuration must mean the same thing regardless of where it came from:
+        :meth:`from_env`, direct Python construction, a test, or a future CLI or
+        API adapter. Two defects made that untrue.
+
+        **Enum fields accepted raw strings.** Every enum-backed field is
+        ``str``-backed, so ``CongineConfig(fail_mode="strict")`` stored a plain
+        ``str`` that compared equal to the member but failed the ``is`` identity
+        checks the code actually branches on. The result was silent: a directly
+        constructed ``fail_mode="strict"`` **degraded instead of raising**, and a
+        ``deployment_mode="multi_tenant"`` bypassed the multi-tenant guard in the
+        LangChain handler. Same class of failure for the P0-introduced
+        ``contract_source`` and ``contract_admission``.
+
+        **Validation ran on only one path.** :meth:`validate` was invoked solely
+        by :meth:`from_env`, so a directly constructed config skipped the
+        credential and HTTPS policy entirely.
+
+        Both are fixed here, in this order — normalization first, so
+        :meth:`validate` always sees canonical members rather than a mixed
+        enum/string state. :meth:`validate` is *called*, never reimplemented:
+        there is exactly one definition of the configuration invariants.
+
+        ``object.__setattr__`` is required because the dataclass is frozen; this
+        mirrors ``TelemetryEvent.__post_init__``.
+        """
+        for name, enum_cls in _ENUM_FIELDS.items():
+            value = getattr(self, name)
+            # Members are str subclasses, so this must precede the str branch.
+            if isinstance(value, enum_cls):
+                continue
+            if not isinstance(value, str):
+                raise CongineConfigurationError(
+                    f"Invalid {name}: expected {enum_cls.__name__} or one of "
+                    f"{_accepted(enum_cls)}, got {type(value).__name__}"
+                )
+            try:
+                coerced = enum_cls(value.strip().lower())
+            except ValueError as exc:
+                raise CongineConfigurationError(
+                    f"Invalid {name}: {value!r}. Accepted: {_accepted(enum_cls)}."
+                ) from exc
+            object.__setattr__(self, name, coerced)
+
+        self.validate()
+
     @staticmethod
     def deployment_mode_from_env() -> DeploymentMode:
         """Read **only** ``CONGINE_DEPLOYMENT_MODE`` from the environment.
@@ -194,7 +319,9 @@ class CongineConfig:
         """
         raw = os.getenv("CONGINE_DEPLOYMENT_MODE", "single_tenant")
         try:
-            return DeploymentMode(raw)
+            # Same strip+lower rule __post_init__ applies, so env and direct
+            # construction accept exactly the same inputs.
+            return DeploymentMode(raw.strip().lower())
         except ValueError as exc:
             raise CongineConfigurationError(
                 f"Invalid CONGINE_DEPLOYMENT_MODE: {raw!r}"
@@ -202,33 +329,74 @@ class CongineConfig:
 
     @staticmethod
     def base_url_from_env(region: Region) -> str:
-        """Resolve the control-plane URL for the current environment (audit Q1).
+        """Resolve the control-plane URL (audit P0-08).
 
-        Precedence: an explicit ``CONGINE_BASE_URL`` always wins; otherwise an
-        explicitly-set ``CONGINE_REGION`` selects its regional endpoint;
-        otherwise the loopback default, so local development is unaffected.
+        Only ``CONGINE_BASE_URL`` selects a control plane. Region is metadata and
+        never infers a destination — the previous region→hostname mapping pointed
+        at unconfirmed placeholder domains, so setting a region could ship an API
+        key to an endpoint nobody had verified.
+
+        Precedence:
+
+        - ``CONGINE_BASE_URL`` set  → use it, whatever the region says.
+        - Neither set               → loopback default (local development).
+        - ``CONGINE_REGION`` set but no base URL → **configuration error.**
+
+        The last case is deliberate. Setting a region declares a remote
+        deployment; silently falling back to ``localhost`` for such a deployment
+        would be precisely the quiet misconfiguration this pass removes. There is
+        no separate "remote" deployment mode to key off — ``DeploymentMode``
+        describes tenancy, and remoteness is derived from the URL itself — so the
+        region flag is the honest signal of that intent.
         """
         explicit = os.getenv("CONGINE_BASE_URL")
         if explicit:
             return explicit
         if os.getenv("CONGINE_REGION"):
-            return region.default_base_url
+            raise CongineConfigurationError(
+                f"CONGINE_REGION={region.value!r} declares a remote deployment, but "
+                "CONGINE_BASE_URL is not set. Region is metadata and no longer "
+                "selects an endpoint (the previous regional hostnames were "
+                "unverified placeholders). Set CONGINE_BASE_URL explicitly."
+            )
         return _DEFAULT_LOCAL_BASE_URL
 
     @classmethod
     def from_env(cls) -> "CongineConfig":
         """Load configuration from ``CONGINE_*`` environment variables."""
         try:
-            region = Region(os.getenv("CONGINE_REGION", "us"))
+            region = Region(os.getenv("CONGINE_REGION", "us").strip().lower())
         except ValueError as exc:
             raise CongineConfigurationError(
                 f"Invalid CONGINE_REGION: {os.getenv('CONGINE_REGION')!r}"
             ) from exc
         try:
-            fail_mode = FailMode(os.getenv("CONGINE_FAIL_MODE", "degrade"))
+            fail_mode = FailMode(
+                os.getenv("CONGINE_FAIL_MODE", "degrade").strip().lower()
+            )
         except ValueError as exc:
             raise CongineConfigurationError(
                 f"Invalid CONGINE_FAIL_MODE: {os.getenv('CONGINE_FAIL_MODE')!r}"
+            ) from exc
+        try:
+            contract_source = ContractSource(
+                os.getenv("CONGINE_CONTRACT_SOURCE", "http").strip().lower()
+            )
+        except ValueError as exc:
+            accepted = ", ".join(sorted(m.value for m in ContractSource))
+            raise CongineConfigurationError(
+                f"Invalid CONGINE_CONTRACT_SOURCE: "
+                f"{os.getenv('CONGINE_CONTRACT_SOURCE')!r}. Accepted: {accepted}."
+            ) from exc
+        try:
+            contract_admission = ContractAdmissionMode(
+                os.getenv("CONGINE_CONTRACT_ADMISSION", "strict").strip().lower()
+            )
+        except ValueError as exc:
+            accepted = ", ".join(sorted(m.value for m in ContractAdmissionMode))
+            raise CongineConfigurationError(
+                f"Invalid CONGINE_CONTRACT_ADMISSION: "
+                f"{os.getenv('CONGINE_CONTRACT_ADMISSION')!r}. Accepted: {accepted}."
             ) from exc
         deployment_mode = cls.deployment_mode_from_env()
 
@@ -238,7 +406,9 @@ class CongineConfig:
             project_id=os.getenv("CONGINE_PROJECT_ID"),
             tenant_id=os.getenv("CONGINE_TENANT_ID"),
             region=region,
-            validation_timeout_ms=cls._env_int("CONGINE_TIMEOUT_MS", 100),
+            validation_timeout_ms=cls._env_int(
+                "CONGINE_TIMEOUT_MS", DEFAULT_VALIDATION_TIMEOUT_MS
+            ),
             fail_mode=fail_mode,
             cache_capacity=cls._env_int("CONGINE_CACHE_CAPACITY", 500),
             cache_ttl_seconds=cls._env_int("CONGINE_CACHE_TTL", 300),
@@ -257,9 +427,9 @@ class CongineConfig:
             drift_sample_limit=cls._env_int("CONGINE_DRIFT_SAMPLE_LIMIT", 500),
             validation_max_workers=cls._env_int("CONGINE_VALIDATION_WORKERS", 10),
             validation_max_pending=cls._env_int("CONGINE_VALIDATION_PENDING", 10),
-            contract_source=os.getenv("CONGINE_CONTRACT_SOURCE", "http").lower(),
-            contracts_dir=os.getenv("CONGINE_CONTRACTS_DIR"),
-            local_contracts_dir=os.getenv("CONGINE_LOCAL_CONTRACTS_DIR"),
+            contract_source=contract_source,
+            contracts_dir=cls._env_optional_path("CONGINE_CONTRACTS_DIR"),
+            local_contracts_dir=cls._env_optional_path("CONGINE_LOCAL_CONTRACTS_DIR"),
             cache_sweep_interval_seconds=cls._env_float(
                 "CONGINE_CACHE_SWEEP_INTERVAL_SECONDS", 30.0
             ),
@@ -312,8 +482,10 @@ class CongineConfig:
             start_background_services=cls._env_bool(
                 "CONGINE_START_BACKGROUND_SERVICES", True
             ),
+            contract_admission=contract_admission,
         )
-        config.validate()
+        # No validate() call here: construction validates (see __post_init__), so
+        # validation has exactly one owner and no caller has to remember it.
         return config
 
     def validate(self) -> None:
@@ -381,13 +553,52 @@ class CongineConfig:
 
     @staticmethod
     def _env_bool(name: str, default: bool) -> bool:
+        """Parse a boolean environment variable, **failing loudly** (audit P0-07).
+
+        Previously any unrecognised text evaluated to ``False``, so
+        ``CONGINE_TELEMETRY_ENABLED=TRUE!`` silently disabled telemetry and
+        ``CONGINE_START_BACKGROUND_SERVICES=enabled`` silently disabled three
+        subsystems. Numeric fields already failed loudly; booleans failed
+        silently, and in one direction only. A typo must never quietly change
+        deployment topology.
+
+        The accepted set is deliberately small and literal — no natural-language
+        truthiness such as ``"yes please"``.
+        """
         raw = os.getenv(name)
         if raw is None:
             return default
         normalized = raw.strip().lower()
-        if normalized in {"0", "false", "no", "off"}:
+        if normalized in _FALSE_VALUES:
             return False
-        return normalized in {"1", "true", "yes", "on"}
+        if normalized in _TRUE_VALUES:
+            return True
+        accepted = ", ".join(sorted(_TRUE_VALUES | _FALSE_VALUES))
+        raise CongineConfigurationError(
+            f"Invalid boolean for {name}: {raw!r}. Accepted values: {accepted}."
+        )
+
+    @staticmethod
+    def _env_optional_path(name: str) -> Optional[str]:
+        """Read a path variable where empty and unset mean different things (P0-07).
+
+        ``CONGINE_LOCAL_CONTRACTS_DIR=""`` — the ordinary shell and orchestrator
+        idiom for "unset this" — used to select standalone mode pointed at an
+        empty directory: no contracts loaded, no sync worker allocated to
+        recover, and every guarded call raising. Empty is now an error, so the
+        misconfiguration is visible at startup instead of at first request.
+
+        unset → not selected · empty/whitespace → error · non-empty → use it.
+        """
+        raw = os.getenv(name)
+        if raw is None:
+            return None
+        if not raw.strip():
+            raise CongineConfigurationError(
+                f"{name} is set but empty. Leave it unset to disable the feature, "
+                "or provide a directory path."
+            )
+        return raw
 
     @staticmethod
     def _env_int(name: str, default: int) -> int:
@@ -422,4 +633,12 @@ class CongineConfig:
             ) from exc
 
 
-__all__ = ["Region", "FailMode", "DeploymentMode", "CongineConfig"]
+__all__ = [
+    "Region",
+    "FailMode",
+    "DeploymentMode",
+    "ContractSource",
+    "ContractAdmissionMode",
+    "CongineConfig",
+    "DEFAULT_VALIDATION_TIMEOUT_MS",
+]

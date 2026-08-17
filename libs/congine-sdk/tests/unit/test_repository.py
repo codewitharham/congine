@@ -27,6 +27,7 @@ def _config() -> CongineConfig:
         project_id="proj",
         tenant_id="tenant",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
     )
 
 
@@ -101,6 +102,7 @@ def _config_with_dir(tmp_path) -> CongineConfig:
         project_id="proj",
         tenant_id="tenant",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         snapshot_dir=str(tmp_path),
     )
 
@@ -125,6 +127,7 @@ def test_snapshot_path_is_tenant_scoped(tmp_path) -> None:
         project_id="proj",
         tenant_id="tenant-A",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         snapshot_dir=str(tmp_path),
     )
     cfg_b = CongineConfig(
@@ -133,6 +136,7 @@ def test_snapshot_path_is_tenant_scoped(tmp_path) -> None:
         project_id="proj",
         tenant_id="tenant-B",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         snapshot_dir=str(tmp_path),
     )
     repo_a = HttpContractRepository(cfg_a)

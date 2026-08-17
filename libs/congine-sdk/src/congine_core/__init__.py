@@ -22,11 +22,18 @@ from congine_core.ports import (
 from congine_core.domain import (
     BreachDetail,
     CompositeValidator,
+    ContractAdmissionCode,
+    ContractAdmissionIssue,
+    ContractAdmissionLevel,
+    ContractAdmissionResult,
+    DegradedReason,
     DriftResult,
     LocalValidator,
     RuleEngine,
     TelemetryEvent,
     ValidationResult,
+    admit_contract,
+    find_unenforced_keywords,
 )
 
 # Layer 3: Use cases
@@ -51,7 +58,14 @@ from congine_core.infrastructure import (
 from congine_core.adapters import ServiceContainer, congine_guard
 
 # Config & exceptions
-from congine_core.config import CongineConfig, DeploymentMode, FailMode, Region
+from congine_core.config import (
+    CongineConfig,
+    ContractAdmissionMode,
+    ContractSource,
+    DeploymentMode,
+    FailMode,
+    Region,
+)
 from congine_core.exceptions import (
     CongineBaseException,
     CongineCacheError,
@@ -61,6 +75,7 @@ from congine_core.exceptions import (
     CongineTelemetryError,
     CongineValidationError,
     ContractBreachException,
+    LoadShedError,
     SchemaCacheMissException,
     TenantIsolationViolationException,
     ValidationTimeoutException,
@@ -96,11 +111,21 @@ __all__ = [
     # Domain
     "BreachDetail",
     "ValidationResult",
+    "DegradedReason",
     "DriftResult",
     "TelemetryEvent",
     "RuleEngine",
     "LocalValidator",
     "CompositeValidator",
+    # Contract admission (audit P0-03/P0-04). Exported so external loaders can
+    # run the same safety check the SDK's own loader does — it was previously
+    # reachable only via a private module path.
+    "admit_contract",
+    "ContractAdmissionResult",
+    "ContractAdmissionIssue",
+    "ContractAdmissionCode",
+    "ContractAdmissionLevel",
+    "find_unenforced_keywords",
     # Use cases
     "ValidateContractUseCase",
     "SyncContractsUseCase",
@@ -124,6 +149,8 @@ __all__ = [
     "Region",
     "FailMode",
     "DeploymentMode",
+    "ContractSource",
+    "ContractAdmissionMode",
     # Exceptions
     "CongineBaseException",
     "CongineValidationError",
@@ -132,6 +159,10 @@ __all__ = [
     "CongineSyncError",
     "CongineCacheError",
     "CongineTelemetryError",
+    # Capacity signalling (audit P0-06). Subclasses TimeoutError, so existing
+    # handlers keep working; catch it first to distinguish "not evaluated" from
+    # "evaluated too slowly".
+    "LoadShedError",
     "ContractBreachException",
     "SchemaCacheMissException",
     "ValidationTimeoutException",

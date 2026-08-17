@@ -11,7 +11,7 @@ from dataclasses import fields, replace
 
 import httpx
 
-from congine_core.config import CongineConfig, DeploymentMode
+from congine_core.config import CongineConfig, ContractSource, DeploymentMode
 from congine_core.domain.models import TelemetryEvent
 from congine_core.exceptions import CongineConfigurationError
 from congine_core.domain.validator import CompositeValidator, LocalValidator, IValidator
@@ -269,7 +269,10 @@ class ServiceContainer:
                 max_contract_files=config.max_contract_files,
                 max_file_bytes=config.max_contract_file_bytes,
             )
-        elif config.contract_source == "file" and config.contracts_dir is not None:
+        elif (
+            config.contract_source is ContractSource.FILE
+            and config.contracts_dir is not None
+        ):
             self.contract_repository = FileContractRepository(
                 contracts_dir=config.contracts_dir,
                 logger=self.logger,
@@ -338,6 +341,8 @@ class ServiceContainer:
             circuit_breaker=self.circuit_breaker,
             boot_lock_path=boot_lock_path,
             semantic_validation_enabled=config.semantic_validation_enabled,
+            semantic_format_checking=config.semantic_format_checking,
+            admission_mode=config.contract_admission,
         )
 
         # Standalone file mode needs no periodic re-sync daemon; leave the worker
@@ -452,12 +457,22 @@ class ServiceContainer:
         Cheap and non-blocking — each component contributes a counter read, never
         I/O. ``dropped_total`` is probed rather than required: it is the one
         optional member of the event-bus surface (audit Q8).
+
+        **Every value here is read through a port-declared member** (audit P0-01).
+        The runner's counters used to be read as concrete attributes
+        (``validation_executor.in_flight`` / ``.rejected_total``) that
+        :class:`IValidationRunner` never declared, so an implementation that
+        faithfully satisfied the port still raised ``AttributeError`` the first
+        time an operator polled health. They now come from the port's own
+        :meth:`IValidationRunner.health`, whose contract already specifies these
+        keys. The published output keys are unchanged.
         """
         dropped_total = getattr(self.event_bus, "dropped_total", None)
+        runner_health = self.validation_executor.health()
         return {
             "cache_entries": self.schema_storage.size(),
-            "validation_in_flight": self.validation_executor.in_flight,
-            "validation_rejected_total": self.validation_executor.rejected_total,
+            "validation_in_flight": runner_health.get("in_flight"),
+            "validation_rejected_total": runner_health.get("rejected_total"),
             "telemetry_queue_depth": self.event_bus.queue_depth(),
             "telemetry_dropped_total": dropped_total()
             if callable(dropped_total)
@@ -467,6 +482,10 @@ class ServiceContainer:
             ),
             "drift_reference_samples": self.drift_engine.sample_count,
             "breaker_state": self.circuit_breaker.state,
+            # Refused policy updates (audit P0-03/P0-04), read through the use
+            # case's declared admission_status() surface rather than its private
+            # counters — the same principle as the runner fix above.
+            **self.sync_contracts_usecase.admission_status(),
         }
 
     def _arm_deferred_teardown(self) -> None:

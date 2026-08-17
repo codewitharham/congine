@@ -120,18 +120,35 @@ def _sync_usecase(storage, repo, logger, *, semantic: bool = False):
     )
 
 
-def test_unenforced_keyword_warns() -> None:
+def test_unenforced_keyword_contract_is_refused() -> None:
+    """A contract whose clause no active evaluator runs is REFUSED (audit P0-04).
+
+    Behaviour change. This test previously asserted the opposite — that such a
+    contract was still primed and merely warned about, "enforcement/caching
+    unchanged". That was the false-safety failure the hardening pass removes: a
+    contract declaring ``minLength: 10`` was cached, validated, and reported
+    ``status="pass"`` for a two-character string, with the only signal a log line
+    at boot that nobody had to read.
+
+    Refusing is strictly safer. Because a missing contract already fails closed,
+    the operator gets a loud error instead of silent non-enforcement.
+    """
     storage, logger = FakeSchemaStorage(), FakeLogger()
     repo = FakeContractRepository(contracts=[_MINLENGTH_CONTRACT])
     loaded = _sync_usecase(storage, repo, logger).sync_once()
 
-    assert loaded == 1  # enforcement/caching unchanged: the schema is still primed
-    assert storage.exists("c")
-    warnings = _unenforced_warnings(logger)
-    assert len(warnings) == 1
-    kwargs = warnings[0]
-    assert kwargs["contract_id"] == "c"
-    assert "summary.minLength" in kwargs["unenforced"]  # names both field & keyword
+    assert loaded == 0
+    assert not storage.exists("c")  # never becomes active policy
+
+    rejections = [
+        kwargs
+        for level, message, kwargs in logger.records
+        if level == "ERROR" and "rejected at admission" in message
+    ]
+    assert len(rejections) == 1
+    assert rejections[0]["contract_id"] == "c"
+    assert "unsupported_keyword" in rejections[0]["codes"]
+    assert "summary.minLength" in rejections[0]["paths"]
 
 
 def test_semantic_validation_enabled_suppresses_warning() -> None:
@@ -143,26 +160,29 @@ def test_semantic_validation_enabled_suppresses_warning() -> None:
     assert _unenforced_warnings(logger) == []
 
 
-def test_unenforced_keyword_warning_is_deduplicated() -> None:
+def test_repeated_rejection_is_counted_every_sync() -> None:
+    """Rejection is reported on every pass, and is observable (audit P0-04).
+
+    Behaviour change. This previously asserted the unenforced-keyword *warning*
+    was de-duplicated across background re-syncs, so an operator saw it once at
+    boot and never again. Now the contract is refused instead of warned about,
+    and refusal is deliberately **not** de-duplicated: a policy update that keeps
+    being rejected is an ongoing unhealthy state, not a one-off notice.
+
+    ``admission_status()`` is the durable signal — logs rotate, counters do not.
+    """
     storage, logger = FakeSchemaStorage(), FakeLogger()
     repo = FakeContractRepository(contracts=[_MINLENGTH_CONTRACT])
     uc = _sync_usecase(storage, repo, logger)
 
     uc.sync_once()
-    uc.sync_once()  # a background re-sync must NOT repeat the warning
-    assert len(_unenforced_warnings(logger)) == 1
-
-    # A changed schema for the same contract id warns again (fingerprint differs).
-    repo._contracts = [
-        {
-            "id": "c",
-            "schema": {"properties": {"summary": {"type": "string", "maxLength": 5}}},
-        }
-    ]
     uc.sync_once()
-    warnings = _unenforced_warnings(logger)
-    assert len(warnings) == 2
-    assert "summary.maxLength" in warnings[1]["unenforced"]
+
+    status = uc.admission_status()
+    assert status["contracts_rejected_total"] == 2
+    assert status["last_admission_failure"]["contract_id"] == "c"
+    assert "unsupported_keyword" in status["last_admission_failure"]["codes"]
+    assert status["admission_mode"] == "strict"
 
 
 def test_clean_contract_produces_no_warning() -> None:
@@ -187,7 +207,18 @@ def test_clean_contract_produces_no_warning() -> None:
     assert _unenforced_warnings(logger) == []
 
 
-def test_malformed_schema_does_not_break_priming() -> None:
+def test_malformed_schema_is_refused_without_breaking_the_sync() -> None:
+    """Malformed contracts are refused; a valid sibling still loads (audit P0-03).
+
+    Behaviour change, but only half of it. The original intent — *a bad contract
+    must never break the sync pass or raise* — is still asserted and still holds.
+    What changed is the other half: it used to assert all four were **cached**,
+    including a schema that is not even a mapping. Such a contract cannot be
+    evaluated at all; caching it produced a permanent ``internal_error``
+    degradation on every validation, reported as ``status="fail"`` with zero
+    breaches. Refusing it at admission converts a silent, permanent runtime
+    defect into one loud load-time error.
+    """
     storage, logger = FakeSchemaStorage(), FakeLogger()
     contracts = [
         {"id": "props-list", "schema": {"properties": ["not", "a", "dict"]}},
@@ -196,17 +227,29 @@ def test_malformed_schema_does_not_break_priming() -> None:
         {"id": "ok", "schema": {"required": ["x"]}},
     ]
     repo = FakeContractRepository(contracts=contracts)
-    loaded = _sync_usecase(storage, repo, logger).sync_once()
+    uc = _sync_usecase(storage, repo, logger)
+    loaded = uc.sync_once()  # must not raise
 
-    # The diagnostic never blocks priming: all four still cached, nothing raised.
-    assert loaded == 4
-    assert all(
-        storage.exists(cid) for cid in ("props-list", "string-spec", "not-a-dict", "ok")
+    assert loaded == 1
+    assert storage.exists("ok")  # the well-formed contract is unaffected
+    assert not any(
+        storage.exists(cid) for cid in ("props-list", "string-spec", "not-a-dict")
     )
+    assert uc.admission_status()["contracts_rejected_total"] == 3
 
 
-def test_unrecognised_type_warns() -> None:
-    """A type the rule engine cannot honour is warned about at load."""
+def test_unrecognised_type_contract_is_refused() -> None:
+    """A type the rule engine cannot honour is REFUSED at load (audit P0-04).
+
+    Behaviour change. Previously "priming is unaffected; the scan is a diagnostic
+    only" — the contract became active and the unknown type simply disabled type
+    checking for that field. The union case is worse still: a union containing an
+    unrecognised member matches *every* value, so the field was entirely
+    unchecked while the contract looked well-formed.
+
+    An unknown type name is a defect in the policy, not in the output being
+    judged, so it belongs at admission rather than as a runtime verdict.
+    """
     storage, logger = FakeSchemaStorage(), FakeLogger()
     contracts = [
         {"id": "bad-type", "schema": {"properties": {"a": {"type": "frobnicate"}}}},
@@ -216,12 +259,20 @@ def test_unrecognised_type_warns() -> None:
         },
     ]
     repo = FakeContractRepository(contracts=contracts)
-    loaded = _sync_usecase(storage, repo, logger).sync_once()
+    uc = _sync_usecase(storage, repo, logger)
+    loaded = uc.sync_once()
 
-    assert loaded == 2  # priming is unaffected; the scan is a diagnostic only
-    paths = [p for w in _unenforced_warnings(logger) for p in w["unenforced"]]
-    assert "a.type" in paths
-    assert "b.type" in paths
+    assert loaded == 0
+    assert not storage.exists("bad-type") and not storage.exists("bad-union")
+
+    rejections = [
+        kwargs
+        for level, message, kwargs in logger.records
+        if level == "ERROR" and "rejected at admission" in message
+    ]
+    assert len(rejections) == 2
+    assert all("unknown_type" in r["codes"] for r in rejections)
+    assert {"a.type", "b.type"} == {p for r in rejections for p in r["paths"]}
 
 
 def test_union_and_null_types_do_not_warn() -> None:

@@ -6,13 +6,19 @@ import json
 import time
 from typing import Any
 
-from congine_core.config import FailMode
-from congine_core.domain.models import BreachDetail, TelemetryEvent, ValidationResult
+from congine_core.config import DEFAULT_VALIDATION_TIMEOUT_MS, FailMode
+from congine_core.domain.models import (
+    BreachDetail,
+    DegradedReason,
+    TelemetryEvent,
+    ValidationResult,
+)
 from congine_core.domain.validator import IValidator
 from congine_core.exceptions import (
     CongineBaseException,
     CongineContractNotFoundError,
     CongineValidationError,
+    LoadShedError,
 )
 from congine_core.pii_sanitize import sanitize_breach_message
 from congine_core.ports.event_bus import IEventBus
@@ -31,7 +37,10 @@ class ValidateContractUseCase:
         event_bus: IEventBus,
         logger: ILogger,
         timer: IValidationRunner,
-        timeout_ms: int = 15,
+        # Single source of truth (audit P0-07 / Q17): this used to default to 15
+        # while configuration defaulted to 100, so direct construction silently
+        # ran a budget almost 7x tighter than the documented one.
+        timeout_ms: int = DEFAULT_VALIDATION_TIMEOUT_MS,
         fail_mode: FailMode = FailMode.DEGRADE,
         max_payload_bytes: int = 1_048_576,
         max_schema_bytes: int = 1_048_576,
@@ -68,17 +77,20 @@ class ValidateContractUseCase:
         started = time.perf_counter()
         try:
             result = self.timer.run_with_timeout(do_validate, self.timeout_ms)
+        except LoadShedError:
+            # MUST precede TimeoutError: LoadShedError subclasses it (audit P0-06).
+            result = self._degraded_on_capacity(contract_id, started)
         except TimeoutError:
             result = self._degraded_on_timeout(contract_id, started)
         except (MemoryError, RecursionError) as exc:
             result = self._degraded_on_error(
-                contract_id, started, exc, "resource_error"
+                contract_id, started, exc, DegradedReason.RESOURCE_ERROR
             )
         except CongineBaseException:
             raise
         except Exception as exc:
             result = self._degraded_on_error(
-                contract_id, started, exc, "internal_error"
+                contract_id, started, exc, DegradedReason.INTERNAL_ERROR
             )
 
         return self._finalize(result, contract_id, contract_version)
@@ -107,26 +119,53 @@ class ValidateContractUseCase:
             result = await self.timer.run_with_timeout_async(
                 do_validate, self.timeout_ms
             )
+        except LoadShedError:
+            # MUST precede TimeoutError: LoadShedError subclasses it (audit P0-06).
+            result = self._degraded_on_capacity(contract_id, started)
         except TimeoutError:
             result = self._degraded_on_timeout(contract_id, started)
         except (MemoryError, RecursionError) as exc:
             result = self._degraded_on_error(
-                contract_id, started, exc, "resource_error"
+                contract_id, started, exc, DegradedReason.RESOURCE_ERROR
             )
         except CongineBaseException:
             raise
         except Exception as exc:
             result = self._degraded_on_error(
-                contract_id, started, exc, "internal_error"
+                contract_id, started, exc, DegradedReason.INTERNAL_ERROR
             )
 
         return self._finalize(result, contract_id, contract_version)
 
     def _check_payload_size(self, payload: dict[str, Any]) -> ValidationResult | None:
+        """Enforce the payload size bound, failing **closed** if unmeasurable.
+
+        A payload that cannot be serialised used to be recorded as ``size = 0``
+        and sailed straight past the bound (audit P0-02) — an input could evade
+        a security control precisely by being malformed.
+
+        The replacement is a *degradation*, not a breach: we never measured the
+        payload, so we cannot claim it exceeded a limit. Saying "policy violated"
+        here would fabricate a verdict we never reached. The caller sees
+        ``is_enforced() is False`` with reason ``INVALID_PAYLOAD``.
+
+        The catch is deliberately broad. Because ``default=str`` already absorbs
+        ordinary unserialisable values, what actually reaches here are hostile or
+        pathological payloads — a circular reference (``ValueError``), a non-string
+        mapping key (``TypeError``), or an object whose own ``__str__``/``__repr__``
+        raises something else entirely. Narrow catching let that last class escape
+        uncaught into the host, bypassing telemetry and the fail-mode policy. A
+        size guard must fail closed for *every* reason it cannot measure, not for
+        an enumerated subset.
+        """
         try:
             size = len(json.dumps(payload, default=str))
-        except (TypeError, ValueError):
-            size = 0
+        except Exception:
+            return self._degraded_unmeasurable(
+                field="<root>",
+                reason=DegradedReason.INVALID_PAYLOAD,
+                message="Payload could not be serialised for size measurement",
+            )
         if size > self.max_payload_bytes:
             return ValidationResult(
                 status="fail",
@@ -141,10 +180,20 @@ class ValidateContractUseCase:
         return None
 
     def _check_schema_size(self, schema: dict[str, Any]) -> ValidationResult | None:
+        """Enforce the schema size bound, failing **closed** if unmeasurable.
+
+        See :meth:`_check_payload_size`, including why the catch is broad. An
+        unmeasurable *schema* is a defective contract rather than a defective
+        payload, so it degrades with ``INVALID_CONTRACT``.
+        """
         try:
             size = len(json.dumps(schema, default=str))
-        except (TypeError, ValueError):
-            size = 0
+        except Exception:
+            return self._degraded_unmeasurable(
+                field="<schema>",
+                reason=DegradedReason.INVALID_CONTRACT,
+                message="Schema could not be serialised for size measurement",
+            )
         if size > self.max_schema_bytes:
             return ValidationResult(
                 status="fail",
@@ -158,6 +207,22 @@ class ValidateContractUseCase:
             )
         return None
 
+    def _degraded_unmeasurable(
+        self, *, field: str, reason: DegradedReason, message: str
+    ) -> ValidationResult:
+        """Build the fail-closed result for an input we could not measure.
+
+        Carries **no breaches** by design: evaluation inability is not a policy
+        violation. ``degraded=True`` is what makes the difference legible to the
+        caller via :meth:`ValidationResult.is_enforced`.
+        """
+        self.logger.error(message, field=field, degraded_reason=reason)
+        return ValidationResult(
+            status="fail",
+            degraded=True,
+            degraded_reason=reason,
+        )
+
     def _resolve_schema(self, contract_id: str) -> dict[str, Any]:
         schema = self.schema_storage.get(contract_id)
         if schema is None:
@@ -168,16 +233,41 @@ class ValidateContractUseCase:
     def _degraded_on_timeout(
         self, contract_id: str, started: float
     ) -> ValidationResult:
+        """The validation ran but overran its deadline."""
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         self.logger.warning(
             "Validation timeout",
             contract_id=contract_id,
             timeout_ms=self.timeout_ms,
+            degraded_reason=DegradedReason.TIMEOUT,
         )
         return ValidationResult(
             status="fail",
             degraded=True,
-            degraded_reason="timeout",
+            degraded_reason=DegradedReason.TIMEOUT,
+            duration_ms=elapsed_ms,
+        )
+
+    def _degraded_on_capacity(
+        self, contract_id: str, started: float
+    ) -> ValidationResult:
+        """Capacity was exhausted, so the validation never ran (audit P0-06).
+
+        Distinct from :meth:`_degraded_on_timeout` in both reason and log
+        message: an operator seeing this needs to scale or shed upstream, not to
+        investigate a slow contract.
+        """
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        self.logger.warning(
+            "Validation load shed (capacity exhausted)",
+            contract_id=contract_id,
+            timeout_ms=self.timeout_ms,
+            degraded_reason=DegradedReason.LOAD_SHED,
+        )
+        return ValidationResult(
+            status="fail",
+            degraded=True,
+            degraded_reason=DegradedReason.LOAD_SHED,
             duration_ms=elapsed_ms,
         )
 
@@ -186,7 +276,7 @@ class ValidateContractUseCase:
         contract_id: str,
         started: float,
         exc: Exception,
-        reason: str,
+        reason: DegradedReason,
     ) -> ValidationResult:
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         self.logger.error(

@@ -67,11 +67,11 @@ Every field of `CongineConfig` is settable via `CONGINE_*` environment variables
 
 | Field | Env var | Default | Description |
 | ----- | ------- | ------- | ----------- |
-| `base_url` | `CONGINE_BASE_URL` | `http://localhost:8080` | Control-plane URL. Overrides the region default when set. |
+| `base_url` | `CONGINE_BASE_URL` | `http://localhost:8080` | Control-plane URL. **The only setting that selects a control plane.** Required whenever `region` is set. |
 | `api_key` | `CONGINE_API_KEY` | _required for non-local_ | API key. Sent as `X-API-Key` on every control-plane request. |
 | `project_id` | `CONGINE_PROJECT_ID` | _required for non-local_ | Project identifier. Sent as `X-Project-ID`; scopes the snapshot path. |
 | `tenant_id` | `CONGINE_TENANT_ID` | _required for non-local_ | Tenant identifier. Sent as `X-Tenant-ID`; scopes the snapshot path. |
-| `region` | `CONGINE_REGION` | `us` | `us` \| `eu` \| `apac`. Selects the **default** `base_url` when `CONGINE_BASE_URL` is unset; an explicit `base_url` always wins. |
+| `region` | `CONGINE_REGION` | `us` | `us` \| `eu` \| `apac`. **Metadata only — it does not select an endpoint.** Only `CONGINE_BASE_URL` chooses a control plane. Setting `region` *without* `base_url` raises rather than silently falling back to loopback. |
 | `validation_timeout_ms` | `CONGINE_TIMEOUT_MS` | `100` | Hard ceiling per validation. The pure rule engine runs in <1ms; the budget covers semantic validation. |
 | `fail_mode` | `CONGINE_FAIL_MODE` | `degrade` | `strict` \| `degrade` \| `silent`. See **Failure modes**. |
 | `cache_capacity` | `CONGINE_CACHE_CAPACITY` | `500` | O(1) LFU cache max entries. `0` disables caching entirely. |
@@ -87,9 +87,10 @@ Every field of `CongineConfig` is settable via `CONGINE_*` environment variables
 | `jsonschema_draft` | `CONGINE_JSONSCHEMA_DRAFT` | `draft202012` | JSON Schema dialect (`draft202012`, `draft201909`, `draft7`, `draft6`, `draft4`). **Fail-closed**: an unrecognised value raises at container construction, even when semantic validation is off. |
 | `validation_max_workers` | `CONGINE_VALIDATION_WORKERS` | `10` | Concurrent validation worker threads. |
 | `validation_max_pending` | `CONGINE_VALIDATION_PENDING` | `10` | Pending slots before load is shed. Capacity = workers + pending. |
-| `contract_source` | `CONGINE_CONTRACT_SOURCE` | `http` | `http` (default) or `file`. `file` selects the file repository **only** in combination with `contracts_dir`; any unrecognised value means `http`. |
-| `contracts_dir` | `CONGINE_CONTRACTS_DIR` | _none_ | Contract directory used when `contract_source=file`. Keeps the background sync worker allocated. |
-| `local_contracts_dir` | `CONGINE_LOCAL_CONTRACTS_DIR` | _none_ | **Standalone switch.** Binds a `FileContractRepository` to this directory and leaves the sync worker unallocated (`container.sync_worker is None`). Leave it *unset* rather than empty — an empty value still selects standalone mode, with an empty directory. |
+| `contract_source` | `CONGINE_CONTRACT_SOURCE` | `http` | `http` or `file`. `file` selects the file repository **only** in combination with `contracts_dir`. **Validated** — an unrecognised value raises instead of silently meaning `http`. |
+| `contracts_dir` | `CONGINE_CONTRACTS_DIR` | _none_ | Contract directory used when `contract_source=file`. Keeps the background sync worker allocated. Unset to disable; an **empty** value raises. |
+| `local_contracts_dir` | `CONGINE_LOCAL_CONTRACTS_DIR` | _none_ | **Standalone switch.** Binds a `FileContractRepository` to this directory and leaves the sync worker unallocated (`container.sync_worker is None`). Leave it *unset* to disable — an **empty** value raises rather than selecting standalone mode against an empty directory. |
+| `contract_admission` | `CONGINE_CONTRACT_ADMISSION` | `strict` | `strict` or `warn`. Contracts are admitted before being cached; one whose meaning CONGINE cannot determine is refused and never becomes active policy. `warn` adds migration advisories for enforceable legacy constructs — it **cannot** admit an invalid or unenforceable contract. See **Contract admission**. |
 | `telemetry_enabled` | `CONGINE_TELEMETRY_ENABLED` | `true` | `false` selects `NoOpEventBus`: no drain thread, no HTTP client, no network. |
 | `telemetry_queue_size` | `CONGINE_TELEMETRY_QUEUE_SIZE` | `10000` | Buffered events before `publish` starts dropping (and counting) them. |
 | `telemetry_batch_size` | `CONGINE_TELEMETRY_BATCH_SIZE` | `100` | Maximum events shipped per POST. |

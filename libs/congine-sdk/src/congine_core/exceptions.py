@@ -51,6 +51,42 @@ class CongineTelemetryError(CongineBaseException):
 
 
 # --------------------------------------------------------------------------- #
+# Capacity signalling (audit P0-06)
+# --------------------------------------------------------------------------- #
+class LoadShedError(TimeoutError):
+    """Work was refused because validation capacity was exhausted.
+
+    Load shedding and deadline expiry both protect the latency budget but mean
+    different things:
+
+    ``TimeoutError``
+        the validation ran and took too long.
+    ``LoadShedError``
+        the validation **never ran at all** — the system was saturated.
+
+    Collapsing both into ``TimeoutError`` left callers, telemetry and evidence
+    unable to distinguish "evaluated too slowly" from "not evaluated", which is
+    the silent non-enforcement this hardening pass exists to remove.
+
+    Two inheritance decisions, both load-bearing:
+
+    - It subclasses **``TimeoutError``** so every existing
+      ``except TimeoutError`` handler keeps catching both conditions unchanged.
+      Handlers that care catch this type *first*.
+    - It deliberately does **not** subclass :class:`CongineBaseException`.
+      :class:`ValidateContractUseCase` re-raises ``CongineBaseException``
+      untouched so SDK/wiring faults reach the host; a shed load is a runtime
+      capacity condition that must *degrade* instead. Deriving from the Congine
+      root would silently turn back-pressure into an exception in the host's
+      face.
+
+    It lives in Layer 0 rather than beside the executor that raises it because
+    Layer 3 must catch it, and an L3 → L4 import would invert the one
+    dependency direction the architecture most protects.
+    """
+
+
+# --------------------------------------------------------------------------- #
 # Tier 2: Semantic aliases (compatibility shims)
 # --------------------------------------------------------------------------- #
 # These are assignment-bound to canonical classes, never independent subclasses.
@@ -74,6 +110,8 @@ __all__ = [
     "CongineSyncError",
     "CongineCacheError",
     "CongineTelemetryError",
+    # Capacity signalling (audit P0-06)
+    "LoadShedError",
     # Tier 2 aliases
     "ContractBreachException",
     "SchemaCacheMissException",

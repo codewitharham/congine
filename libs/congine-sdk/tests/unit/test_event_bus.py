@@ -19,6 +19,7 @@ def _config() -> CongineConfig:
         project_id="proj",
         tenant_id="tenant",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
     )
 
 

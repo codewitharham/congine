@@ -28,6 +28,12 @@ import concurrent.futures
 import threading
 from typing import Any, Callable, Dict
 
+# Raised here, caught in Layer 3. Defined in Layer 0 so the use case can catch it
+# without an L3 -> L4 import (audit P0-06).
+from congine_core.exceptions import LoadShedError
+
+__all__ = ["BoundedValidationExecutor", "LoadShedError"]
+
 
 class BoundedValidationExecutor:
     """Bounded, load-shedding executor for time-boxed validation work.
@@ -92,8 +98,10 @@ class BoundedValidationExecutor:
             Whatever *func* returns.
 
         Raises:
-            TimeoutError: If *func* overruns the budget, OR if the pool is
-                saturated (load shed) — the caller degrades either way.
+            LoadShedError: If the pool is saturated, so *func* never ran.
+            TimeoutError: If *func* ran but overran the budget. Note
+                ``LoadShedError`` subclasses this, so a bare
+                ``except TimeoutError`` still catches both.
         """
         # Re-entrant call from our own worker: run inline to avoid a nested
         # same-pool deadlock (best-effort timeout; CPU work is bounded upstream).
@@ -128,8 +136,10 @@ class BoundedValidationExecutor:
             Whatever *func* returns.
 
         Raises:
-            TimeoutError: If *func* overruns the budget, OR if the pool is
-                saturated (load shed), OR if the pool is already shut down.
+            LoadShedError: If the pool is saturated, so *func* never ran.
+            TimeoutError: If *func* ran but overran the budget, or if the pool
+                is already shut down. ``LoadShedError`` subclasses this, so a
+                bare ``except TimeoutError`` still catches both.
         """
         # Re-entrancy: if we are already on a pool worker (e.g. the use case is
         # itself running inside an offloaded execute) run inline — no second
@@ -161,7 +171,9 @@ class BoundedValidationExecutor:
         if not self._sem.acquire(blocking=False):
             with self._lock:
                 self._rejected_total += 1
-            raise TimeoutError("validation capacity exhausted (load shed)")
+            # Distinct type, not a distinct message (audit P0-06): callers must
+            # never have to parse prose to tell load shed from deadline expiry.
+            raise LoadShedError("validation capacity exhausted (load shed)")
 
         with self._lock:
             self._in_flight += 1

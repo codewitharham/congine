@@ -167,6 +167,7 @@ def config() -> CongineConfig:
         project_id="proj-1",
         tenant_id="tenant-1",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         validation_timeout_ms=50,
         fail_mode=FailMode.DEGRADE,
         cache_capacity=10,
