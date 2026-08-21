@@ -139,6 +139,26 @@ def test_close_is_idempotent() -> None:
     assert c._closed is True
 
 
+def test_get_default_replaces_closed_cached_instance() -> None:
+    first = ServiceContainer.get_default()
+    first.close()
+
+    replacement = ServiceContainer.get_default()
+
+    assert replacement is not first
+    assert replacement.closed is False
+
+
+def test_for_tenant_replaces_closed_cached_instance() -> None:
+    first = ServiceContainer.for_tenant("tenant", "project")
+    first.close()
+
+    replacement = ServiceContainer.for_tenant("tenant", "project")
+
+    assert replacement is not first
+    assert replacement.closed is False
+
+
 def test_evicted_container_explicit_close_detaches_finalizer() -> None:
     """An explicitly-closed, evicted container must not tear down twice.
 

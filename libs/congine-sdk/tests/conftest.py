@@ -93,14 +93,23 @@ class FakeSchemaStorage:
 class ImmediateTimer:
     """:class:`IValidationRunner` stand-in that runs *func* inline (no threads).
 
-    Deliberately partial: it implements only ``run_with_timeout``, because the
-    use-case tests that inject it never touch the rest of the port. Use
-    ``FakeRunner`` in ``tests/test_validation_runner_port.py`` for a double that
-    satisfies the full protocol.
+    It implements the complete runtime-checkable port so constructor injection
+    exercises the same composition boundary as production wiring.
     """
+
+    capacity = 1
 
     def run_with_timeout(self, func: Any, timeout_ms: int) -> Any:
         return func()
+
+    async def run_with_timeout_async(self, func: Any, timeout_ms: int) -> Any:
+        return func()
+
+    def health(self) -> Dict[str, Any]:
+        return {"in_flight": 0, "rejected_total": 0, "capacity": self.capacity}
+
+    def shutdown(self, wait: bool = False) -> None:
+        """No-op: the inline fake owns no resources."""
 
 
 class FakeContractRepository:

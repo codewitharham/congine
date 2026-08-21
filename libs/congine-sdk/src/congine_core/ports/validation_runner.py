@@ -87,7 +87,8 @@ class IValidationRunner(IObservable, Protocol):
 
         Raises:
             TimeoutError: If *func* overruns the budget, OR if the runner is
-                saturated (load shed), OR if the runner is already shut down.
+                saturated (load shed).
+            CongineLifecycleError: If the runner is already shut down.
         """
         ...
 

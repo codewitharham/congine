@@ -12,7 +12,7 @@ import pytest
 
 from congine_core.adapters.guard import congine_guard
 from congine_core.domain.models import BreachDetail, ValidationResult
-from congine_core.exceptions import CongineValidationError
+from congine_core.exceptions import CongineLifecycleError, CongineValidationError
 
 
 class _FakeUseCase:
@@ -36,11 +36,16 @@ class _FakeUseCase:
 
 class _FakeContainer:
     def __init__(self) -> None:
+        self._closed = False
         self.validate_contract_usecase = _FakeUseCase()
         # The async guard offloads execute() onto this pool (H2).
         self.validation_executor = types.SimpleNamespace(
             thread_pool=concurrent.futures.ThreadPoolExecutor(max_workers=2)
         )
+
+    def ensure_open(self) -> None:
+        if self._closed:
+            raise CongineLifecycleError("ServiceContainer is closed")
 
 
 def test_sync_wrapper_returns_output_and_result() -> None:
@@ -147,3 +152,35 @@ def test_extractor_wraps_non_dict_output() -> None:
 def test_invalid_mode_rejected() -> None:
     with pytest.raises(ValueError):
         congine_guard("c", mode="bogus")
+
+
+def test_sync_guard_rejects_closed_container_before_host_call() -> None:
+    container = _FakeContainer()
+    container._closed = True
+    called = False
+
+    @congine_guard("c", container=container)
+    def f() -> dict:
+        nonlocal called
+        called = True
+        return {"a": 1}
+
+    with pytest.raises(CongineLifecycleError, match="closed"):
+        f()
+    assert called is False
+
+
+def test_async_guard_rejects_closed_container_before_host_call() -> None:
+    container = _FakeContainer()
+    container._closed = True
+    called = False
+
+    @congine_guard("c", container=container)
+    async def f() -> dict:
+        nonlocal called
+        called = True
+        return {"a": 1}
+
+    with pytest.raises(CongineLifecycleError, match="closed"):
+        asyncio.run(f())
+    assert called is False

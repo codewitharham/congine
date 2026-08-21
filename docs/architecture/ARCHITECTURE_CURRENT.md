@@ -1,5 +1,14 @@
 # CONGINE — CURRENT ARCHITECTURE (verified)
 
+> **Superseded implementation snapshot (2026-08-21).** This forensic document
+> describes commit `a561992` plus its noted working tree and is retained as
+> historical evidence until the planned P3 reconciliation. For current closure
+> status, use `docs/_suite/hardening/P0_COMPLETION_REPORT.md`,
+> `docs/_suite/hardening/P1_PRE_CHANGE_VERIFICATION.md`, and
+> `docs/_suite/hardening/P1_COMPLETION_REPORT.md`. In particular, its test
+> counts and open P0/P1 debt tables are not statements about the post-P1
+> codebase.
+
 **Generated:** 2026-08-09 · **Commit:** `a561992c69bf5ca334492706314f6ffc9d5ece10` (branch
 `ahmed-main-v2`), **plus an uncommitted working tree** carrying the P0-2 change ·
 **Supersedes:** the 2026-06-14 audit set (`docs/system-analysis/00_SYSTEM_MAP.md`,

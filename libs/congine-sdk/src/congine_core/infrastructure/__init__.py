@@ -19,11 +19,6 @@ from congine_core.infrastructure.logger import StructuredLogger
 from congine_core.infrastructure.noop_event_bus import NoOpEventBus
 from congine_core.infrastructure.queue_event_bus import QueueEventBus
 
-# Intentionally NOT exported (audit D-3/D-11): ValidationTimer.
-# Wiring it directly defeats the load-shedding / async-symmetric guarantees of
-# BoundedValidationExecutor. It remains importable from
-# `congine_core.infrastructure.timer` for legacy reference only.
-
 __all__ = [
     "LFUCache",
     "HttpContractRepository",

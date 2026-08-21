@@ -6,15 +6,15 @@ import asyncio
 import contextlib
 import threading
 import weakref
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
 from dataclasses import fields, replace
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional, Sequence
 
 import httpx
 
 from congine_core.config import CongineConfig, ContractSource, DeploymentMode
-from congine_core.domain.models import TelemetryEvent
-from congine_core.exceptions import CongineConfigurationError
+from congine_core.models import TelemetryEvent
 from congine_core.domain.validator import CompositeValidator, LocalValidator, IValidator
+from congine_core.exceptions import CongineConfigurationError, CongineLifecycleError
 from congine_core.infrastructure.background_sync import BackgroundSyncWorker
 from congine_core.infrastructure.bounded_executor import BoundedValidationExecutor
 from congine_core.infrastructure.circuit_breaker import CircuitBreaker
@@ -34,7 +34,10 @@ from congine_core.ports.contract_repository import IContractRepository
 from congine_core.ports.event_bus import IEventBus
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.domain.models import DriftResult
+    from congine_core.models import DriftResult
+
+
+_CONCURRENT_CLOSE_WAIT_SECONDS = 8.0
 
 
 def _teardown_components(
@@ -42,8 +45,9 @@ def _teardown_components(
     schema_storage: Any,
     event_bus: Any,
     validation_executor: Any,
+    drain: bool = False,
 ) -> None:
-    """Best-effort, non-blocking teardown for a deferred (evicted) container.
+    """Best-effort teardown in producer-before-consumer dependency order.
 
     Invoked by :func:`weakref.finalize` on an arbitrary thread once the container
     is unreferenced. Uses ``drain=False`` so a slow/unreachable control plane
@@ -54,12 +58,15 @@ def _teardown_components(
     if sync_worker is not None:
         with contextlib.suppress(Exception):
             sync_worker.stop()
-    with contextlib.suppress(Exception):
-        schema_storage.stop()
-    with contextlib.suppress(Exception):
-        event_bus.stop(drain=False)
-    with contextlib.suppress(Exception):
-        validation_executor.shutdown(wait=False)
+    if validation_executor is not None:
+        with contextlib.suppress(Exception):
+            validation_executor.shutdown(wait=False)
+    if event_bus is not None:
+        with contextlib.suppress(Exception):
+            event_bus.stop(drain=drain)
+    if schema_storage is not None:
+        with contextlib.suppress(Exception):
+            schema_storage.stop()
 
 
 class ServiceContainer:
@@ -102,13 +109,15 @@ class ServiceContainer:
                 "ServiceContainer.for_tenant(tenant_id, project_id)."
             )
         instance = cls._default_instance
-        if instance is not None:
+        if instance is not None and not instance.closed:
             return instance
         with cls._default_lock:
-            if cls._default_instance is None:
+            instance = cls._default_instance
+            if instance is None or instance.closed:
                 # Full environment parse happens ONCE, at construction.
-                cls._default_instance = cls(CongineConfig.from_env())
-            return cls._default_instance
+                instance = cls(CongineConfig.from_env())
+                cls._default_instance = instance
+            return instance
 
     @staticmethod
     def _deployment_mode_is_multi_tenant() -> bool:
@@ -147,10 +156,12 @@ class ServiceContainer:
         evicted_key: Optional[str] = None
         with cls._tenant_lock:
             existing = cls._tenant_registry.get(key)
-            if existing is not None:
+            if existing is not None and not existing.closed:
                 cls._tenant_registry.pop(key)
                 cls._tenant_registry[key] = existing
                 return existing
+            if existing is not None:
+                cls._tenant_registry.pop(key)
 
             if config is None:
                 base = CongineConfig.from_env()
@@ -221,11 +232,31 @@ class ServiceContainer:
 
     def __init__(self, config: CongineConfig) -> None:
         self.config = config
-        # Lifecycle guards (audit P0-1): make close() idempotent and let an evicted
-        # container defer teardown until it is genuinely unreferenced.
         self._closed = False
         self._close_lock = threading.Lock()
-        self._finalizer: Optional[weakref.finalize] = None
+        self._close_complete = threading.Event()
+        self._finalizer: Optional[weakref.finalize[..., ServiceContainer]] = None
+        try:
+            self._initialize_components(config)
+        except BaseException:
+            with self._close_lock:
+                self._closed = True
+            finalizer = self._finalizer
+            self._finalizer = None
+            if finalizer is not None:
+                finalizer.detach()
+            _teardown_components(
+                getattr(self, "sync_worker", None),
+                getattr(self, "schema_storage", None),
+                getattr(self, "event_bus", None),
+                getattr(self, "validation_executor", None),
+                False,
+            )
+            self._close_complete.set()
+            raise
+
+    def _initialize_components(self, config: CongineConfig) -> None:
+        """Build the full graph transactionally, starting workers only at the end."""
         start_bg = config.start_background_services
 
         self.logger = StructuredLogger(
@@ -250,7 +281,7 @@ class ServiceContainer:
             capacity=config.cache_capacity,
             ttl_seconds=config.cache_ttl_seconds,
             sweep_interval=config.cache_sweep_interval_seconds,
-            start_sweeper=start_bg,
+            start_sweeper=False,
         )
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=config.breaker_failure_threshold,
@@ -260,11 +291,12 @@ class ServiceContainer:
         # a FileContractRepository straight to disk and suppresses the background
         # sync daemon (the boot prime reads the directory once). Falls back to the
         # legacy file-source switch, then to the HTTP control plane.
-        self._standalone = config.local_contracts_dir is not None
+        local_contracts_dir = config.local_contracts_dir
+        self._standalone = local_contracts_dir is not None
         self.contract_repository: IContractRepository
-        if self._standalone:
+        if local_contracts_dir is not None:
             self.contract_repository = FileContractRepository(
-                contracts_dir=config.local_contracts_dir,
+                contracts_dir=local_contracts_dir,
                 logger=self.logger,
                 max_contract_files=config.max_contract_files,
                 max_file_bytes=config.max_contract_file_bytes,
@@ -299,7 +331,7 @@ class ServiceContainer:
                     timeout=config.control_plane_http_timeout_seconds
                 ),
                 circuit_breaker=self.circuit_breaker,
-                start_worker=start_bg,
+                start_worker=False,
             )
         self.semantic_validator = JsonSchemaSemanticValidator(
             max_breaches=config.semantic_max_breaches,
@@ -359,6 +391,13 @@ class ServiceContainer:
                 start_worker=False,
             )
 
+        # Start background owners only after the entire graph exists. A failure
+        # in either start path is caught by __init__ and rolls back every owner.
+        if start_bg:
+            self.schema_storage.start()
+            if isinstance(self.event_bus, QueueEventBus):
+                self.event_bus.start()
+
         # Arm deferred teardown for EVERY container, not only evicted ones
         # (audit Q5). Construction may already have started the cache sweeper and
         # the telemetry drain thread; a container that is simply dropped — never
@@ -367,8 +406,8 @@ class ServiceContainer:
         # eviction path. Arming here makes every container self-cleaning.
         #
         # Must be the LAST statement: the finalizer captures the sub-components,
-        # so they all have to exist. A failure earlier in __init__ still leaks
-        # (nothing is returned to close), which is tracked separately.
+        # so they all have to exist. __init__ rolls every owner back if anything
+        # above fails, including either delayed worker start.
         self._arm_deferred_teardown()
 
     @classmethod
@@ -380,6 +419,20 @@ class ServiceContainer:
         """
         return cls(CongineConfig.from_env())
 
+    @property
+    def closed(self) -> bool:
+        """Whether this container has entered terminal shutdown."""
+        with self._close_lock:
+            return self._closed
+
+    def ensure_open(self) -> None:
+        """Fail fast when an entry point is used after shutdown begins."""
+        with self._close_lock:
+            if self._closed:
+                raise CongineLifecycleError(
+                    "ServiceContainer is closed and cannot accept new work"
+                )
+
     def bootstrap(self) -> int:
         """Prime the schema cache, then optionally start the periodic sync worker.
 
@@ -387,6 +440,7 @@ class ServiceContainer:
         drives the fetch with :func:`asyncio.run`, which would otherwise raise a
         far less actionable error deep in the call stack.
         """
+        self.ensure_open()
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -401,12 +455,14 @@ class ServiceContainer:
         return loaded
 
     async def bootstrap_async(self) -> int:
+        self.ensure_open()
         loaded = await self.sync_contracts_usecase.sync_once_single_flight_async()
         if self.config.sync_enabled:
             self.start_background_sync()
         return loaded
 
     def start_background_sync(self) -> None:
+        self.ensure_open()
         if self.sync_worker is not None:
             self.sync_worker.start()
 
@@ -416,10 +472,12 @@ class ServiceContainer:
         Drift is an opt-in *library capability*, not an automatic pipeline: no
         validation outcome reaches the engine unless a host calls this.
         """
+        self.ensure_open()
         self.drift_engine.add_reference(value)
 
     def evaluate_drift(self, current_samples: Sequence[float]) -> "DriftResult":
         """Run the drift test and publish a ``__drift__`` event on detection (audit M1)."""
+        self.ensure_open()
         try:
             result = self.drift_engine.detect(current_samples)
         except ImportError as exc:
@@ -467,6 +525,7 @@ class ServiceContainer:
         :meth:`IValidationRunner.health`, whose contract already specifies these
         keys. The published output keys are unchanged.
         """
+        self.ensure_open()
         dropped_total = getattr(self.event_bus, "dropped_total", None)
         runner_health = self.validation_executor.health()
         return {
@@ -511,6 +570,7 @@ class ServiceContainer:
                 self.schema_storage,
                 self.event_bus,
                 self.validation_executor,
+                False,
             )
 
     def close(self) -> None:
@@ -519,21 +579,35 @@ class ServiceContainer:
         Teardown runs outside any class lock. If a deferred-teardown finalizer was
         armed (this container was evicted), it is detached so teardown happens once.
         """
+        wait_for_existing_close = False
+        finalizer: Optional[weakref.finalize[..., ServiceContainer]] = None
         with self._close_lock:
             if self._closed:
-                return
-            self._closed = True
-        if self.sync_worker is not None:
-            self.sync_worker.stop()
-        self.schema_storage.stop()
-        self.event_bus.stop(drain=True)
-        self.validation_executor.shutdown(wait=False)
-        finalizer = self._finalizer
-        self._finalizer = None
+                wait_for_existing_close = not self._close_complete.is_set()
+            else:
+                self._closed = True
+                finalizer = self._finalizer
+                self._finalizer = None
+        if wait_for_existing_close:
+            self._close_complete.wait(timeout=_CONCURRENT_CLOSE_WAIT_SECONDS)
+            return
+        if self._close_complete.is_set():
+            return
         if finalizer is not None:
             finalizer.detach()
+        try:
+            _teardown_components(
+                self.sync_worker,
+                self.schema_storage,
+                self.event_bus,
+                self.validation_executor,
+                True,
+            )
+        finally:
+            self._close_complete.set()
 
     def __enter__(self) -> "ServiceContainer":
+        self.ensure_open()
         return self
 
     def __exit__(self, *_exc: object) -> None:

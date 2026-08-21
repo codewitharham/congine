@@ -93,21 +93,12 @@ def test_repeatable_sync_updates_in_place() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Unenforced-keyword diagnostic (audit P0-2). Load-time WARNING only; enforcement
-# and cached contents are unchanged.
+# Contract admission around keywords outside the native evaluator vocabulary.
 # --------------------------------------------------------------------------- #
 _MINLENGTH_CONTRACT = {
     "id": "c",
     "schema": {"properties": {"summary": {"type": "string", "minLength": 10}}},
 }
-
-
-def _unenforced_warnings(logger: FakeLogger) -> list[dict]:
-    return [
-        kwargs
-        for level, message, kwargs in logger.records
-        if level == "WARNING" and "does not enforce" in message
-    ]
 
 
 def _sync_usecase(storage, repo, logger, *, semantic: bool = False):
@@ -151,13 +142,13 @@ def test_unenforced_keyword_contract_is_refused() -> None:
     assert "summary.minLength" in rejections[0]["paths"]
 
 
-def test_semantic_validation_enabled_suppresses_warning() -> None:
+def test_semantic_validation_enabled_admits_semantic_keyword() -> None:
     storage, logger = FakeSchemaStorage(), FakeLogger()
     repo = FakeContractRepository(contracts=[_MINLENGTH_CONTRACT])
     loaded = _sync_usecase(storage, repo, logger, semantic=True).sync_once()
 
-    assert loaded == 1  # still primed; full JSON Schema now enforces minLength
-    assert _unenforced_warnings(logger) == []
+    assert loaded == 1  # full JSON Schema enforces minLength
+    assert storage.exists("c")
 
 
 def test_repeated_rejection_is_counted_every_sync() -> None:
@@ -185,7 +176,7 @@ def test_repeated_rejection_is_counted_every_sync() -> None:
     assert status["admission_mode"] == "strict"
 
 
-def test_clean_contract_produces_no_warning() -> None:
+def test_clean_contract_is_admitted() -> None:
     storage, logger = FakeSchemaStorage(), FakeLogger()
     clean = {
         "id": "clean",
@@ -201,10 +192,9 @@ def test_clean_contract_produces_no_warning() -> None:
         },
     }
     repo = FakeContractRepository(contracts=[clean])
-    _sync_usecase(storage, repo, logger).sync_once()
-
-    # Anti-noise guard: if ordinary contracts warn, operators mute the channel.
-    assert _unenforced_warnings(logger) == []
+    uc = _sync_usecase(storage, repo, logger)
+    assert uc.sync_once() == 1
+    assert uc.admission_status()["contracts_rejected_total"] == 0
 
 
 def test_malformed_schema_is_refused_without_breaking_the_sync() -> None:
@@ -275,8 +265,8 @@ def test_unrecognised_type_contract_is_refused() -> None:
     assert {"a.type", "b.type"} == {p for r in rejections for p in r["paths"]}
 
 
-def test_union_and_null_types_do_not_warn() -> None:
-    """Audit Q2: ``["string", "null"]`` is enforced, so loading it is silent."""
+def test_union_and_null_types_are_admitted() -> None:
+    """Audit Q2: ``["string", "null"]`` is enforced and admitted."""
     storage, logger = FakeSchemaStorage(), FakeLogger()
     contracts = [
         {"id": "null-type", "schema": {"properties": {"a": {"type": "null"}}}},
@@ -289,4 +279,4 @@ def test_union_and_null_types_do_not_warn() -> None:
     loaded = _sync_usecase(storage, repo, logger).sync_once()
 
     assert loaded == 2
-    assert _unenforced_warnings(logger) == []
+    assert storage.exists("null-type") and storage.exists("union-type")

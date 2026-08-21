@@ -10,7 +10,7 @@ from congine_core.domain.contract_admission import (
     ContractAdmissionResult,
     admit_contract,
 )
-from congine_core.domain.models import (
+from congine_core.models import (
     BreachDetail,
     DegradedReason,
     DriftResult,

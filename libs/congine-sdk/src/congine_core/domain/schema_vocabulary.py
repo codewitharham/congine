@@ -3,28 +3,21 @@
 Pure domain knowledge that mirrors what :meth:`LocalValidator._extract_params`
 in :mod:`congine_core.domain.validator` actually reads. It lets callers detect
 contract keywords the rule engine will silently ignore under default (rule-only)
-configuration, so the "false-safety" foot-gun (audit F-2 / P0-2) becomes an
-observable warning instead of a silent pass.
+configuration. Contract admission composes this scanner so the "false-safety"
+foot-gun (audit F-2 / P0-2) becomes a load-time refusal instead of a silent pass.
 
 This module is pure: no I/O, no logging, no config. It only inspects a schema
 mapping and returns the ``field.keyword`` paths the rule engine does not enforce.
 It deliberately does **not** import ``validator`` — the vocabulary is mirrored
 here and guarded against drift by ``tests/unit/test_schema_vocabulary.py``.
 
-.. important:: **Calling this is a required step for every contract loader.**
+.. important:: **Contract admission is required for every contract loader.**
 
-   The warning it powers is the *only* signal a user gets that part of their
-   contract is decorative. It is not enough to scan on one path: today
-   :meth:`SyncContractsUseCase._prime_cache` is the only writer into
-   :class:`ISchemaStorage`, but every entry point on the roadmap (MCP server,
-   CLI, direct schema injection) will add another, and each one that forgets
-   silently reopens the false-safety foot-gun (audit Q4).
-
-   **The rule: any code path that writes a schema into ``ISchemaStorage`` must
-   run this scan and surface the result.** It is enforced by
-   ``tests/unit/test_schema_vocabulary.py::test_every_schema_writer_scans_for_unenforced_keywords``,
-   which fails when a new ``put(...)`` call site appears in a module that does
-   not reference the scan.
+   Every code path that writes a schema into ``ISchemaStorage`` must first call
+   :func:`congine_core.domain.contract_admission.admit_contract`. Admission
+   composes this public scanner with structural checks and refuses any clause no
+   active evaluator executes. Source-tree tests enforce that a new ``put(...)``
+   call site cannot appear without admission in the same module (audit Q4).
 """
 
 from __future__ import annotations

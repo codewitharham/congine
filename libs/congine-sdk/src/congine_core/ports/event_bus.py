@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, avoids upward import
-    from congine_core.domain.models import TelemetryEvent
+    from congine_core.models import TelemetryEvent
 
 
 @runtime_checkable

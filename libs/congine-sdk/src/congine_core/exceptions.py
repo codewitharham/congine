@@ -1,6 +1,6 @@
 """Canonical Congine exceptions.
 
-Tier 1 exposes a single root (:class:`CongineBaseException`) and the six
+Tier 1 exposes a single root (:class:`CongineBaseException`) and the canonical
 canonical exception types raised throughout the SDK — every concrete error
 derives from the root so host code can guard the entire SDK with one
 ``except CongineBaseException`` clause.
@@ -48,6 +48,10 @@ class CongineCacheError(CongineBaseException):
 
 class CongineTelemetryError(CongineBaseException):
     """Telemetry publishing failed."""
+
+
+class CongineLifecycleError(CongineBaseException):
+    """Work was requested after an SDK component entered terminal shutdown."""
 
 
 # --------------------------------------------------------------------------- #
@@ -110,6 +114,7 @@ __all__ = [
     "CongineSyncError",
     "CongineCacheError",
     "CongineTelemetryError",
+    "CongineLifecycleError",
     # Capacity signalling (audit P0-06)
     "LoadShedError",
     # Tier 2 aliases

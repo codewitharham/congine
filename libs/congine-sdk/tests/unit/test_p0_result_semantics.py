@@ -139,11 +139,11 @@ def test_deadline_overrun_raises_timeout_but_not_load_shed() -> None:
 
 
 def test_use_case_maps_the_two_conditions_to_distinct_reasons() -> None:
-    class Shedding:
+    class Shedding(ImmediateTimer):
         def run_with_timeout(self, func, timeout_ms):
             raise LoadShedError("saturated")
 
-    class Slow:
+    class Slow(ImmediateTimer):
         def run_with_timeout(self, func, timeout_ms):
             raise TimeoutError("deadline")
 

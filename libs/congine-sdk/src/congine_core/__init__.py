@@ -71,6 +71,7 @@ from congine_core.exceptions import (
     CongineCacheError,
     CongineConfigurationError,
     CongineContractNotFoundError,
+    CongineLifecycleError,
     CongineSyncError,
     CongineTelemetryError,
     CongineValidationError,
@@ -159,6 +160,7 @@ __all__ = [
     "CongineSyncError",
     "CongineCacheError",
     "CongineTelemetryError",
+    "CongineLifecycleError",
     # Capacity signalling (audit P0-06). Subclasses TimeoutError, so existing
     # handlers keep working; catch it first to distinguish "not evaluated" from
     # "evaluated too slowly".

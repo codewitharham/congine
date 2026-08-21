@@ -79,7 +79,7 @@ class ReturnTicketSchema(BaseModel):
 
     ticket_id: str = Field(description="The unique customer ticket identifier code.")
     action: str = Field(
-        description="Must be exactly one of: approve_return, reject_return, manual_review"
+        description="Must be exactly one of: approve_return, reject_return, escalate"
     )
     confidence_score: float = Field(
         description="Confidence metrics. Must be between 0.0 and 1.0.", ge=0.0, le=1.0
@@ -99,7 +99,7 @@ def process_untrusted_customer_ticket(
     if llm is None:
         return {
             "ticket_id": ticket_id,
-            "action": "manual_review",
+            "action": "escalate",
             "confidence_score": 0.5,
             "summary": "Provider key unavailable. Script running in offline fallback mode.",
         }

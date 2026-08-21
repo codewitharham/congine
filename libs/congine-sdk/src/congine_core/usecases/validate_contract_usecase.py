@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from congine_core.config import DEFAULT_VALIDATION_TIMEOUT_MS, FailMode
-from congine_core.domain.models import (
+from congine_core.models import (
     BreachDetail,
     DegradedReason,
     TelemetryEvent,
@@ -16,6 +16,7 @@ from congine_core.domain.models import (
 from congine_core.domain.validator import IValidator
 from congine_core.exceptions import (
     CongineBaseException,
+    CongineConfigurationError,
     CongineContractNotFoundError,
     CongineValidationError,
     LoadShedError,
@@ -25,6 +26,14 @@ from congine_core.ports.event_bus import IEventBus
 from congine_core.ports.logger import ILogger
 from congine_core.ports.schema_storage import ISchemaStorage
 from congine_core.ports.validation_runner import IValidationRunner
+
+
+def _require_protocol(role: str, implementation: object, protocol: type[Any]) -> None:
+    """Fail fast when a constructor-injected role misses its declared port."""
+    if not isinstance(implementation, protocol):
+        raise CongineConfigurationError(
+            f"Invalid {role}: expected an implementation of {protocol.__name__}"
+        )
 
 
 class ValidateContractUseCase:
@@ -45,6 +54,12 @@ class ValidateContractUseCase:
         max_payload_bytes: int = 1_048_576,
         max_schema_bytes: int = 1_048_576,
     ) -> None:
+        _require_protocol("schema_storage", schema_storage, ISchemaStorage)
+        _require_protocol("validator", validator, IValidator)
+        _require_protocol("event_bus", event_bus, IEventBus)
+        _require_protocol("logger", logger, ILogger)
+        _require_protocol("validation_runner", timer, IValidationRunner)
+
         self.schema_storage = schema_storage
         self.validator = validator
         self.event_bus = event_bus

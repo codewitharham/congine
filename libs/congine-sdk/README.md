@@ -21,7 +21,7 @@ pip install congine-sdk
 | `langchain` | LangChain `BaseCallbackHandler` integration                      | `pip install 'congine-sdk[langchain]'` |
 | `stats`     | KS-test drift detection (requires NumPy)                         | `pip install 'congine-sdk[stats]'`     |
 | `redos`     | Linear-time regex backend (`re2`) for the rule engine            | `pip install 'congine-sdk[redos]'`     |
-| `dev`       | Test / lint toolchain (pytest, pytest-asyncio, pytest-cov, ruff) | `pip install 'congine-sdk[dev]'`       |
+| `dev`       | Test / lint toolchain (pytest, pytest-asyncio, pytest-cov, ruff, mypy) | `pip install 'congine-sdk[dev]'`       |
 
 `congine-sdk[redos]` is recommended for any deployment that ingests adversarial user input — pattern length caps are still applied by default, but `re2` provides hard linear-time guarantees.
 
@@ -59,6 +59,40 @@ async def reply(prompt: str) -> dict:
 
 The async path goes through the **same bounded, load-shedding executor** as the sync path — there is no `run_in_executor` bypass.
 
+## Container lifecycle
+
+`ServiceContainer` owns worker threads, the validation pool, cache maintenance,
+and optional telemetry clients. Prefer explicit or context-managed ownership:
+
+```python
+from congine_core import ServiceContainer
+
+with ServiceContainer.from_env() as container:
+    container.bootstrap()
+    # construct guards and integrations with container=container
+```
+
+`close()` is thread-safe, bounded, idempotent, and terminal. `closed` reports
+the state, while `ensure_open()` raises `CongineLifecycleError` after shutdown.
+Container methods, guards, and framework adapters check this boundary before
+accepting new work. Create a new container instead of reusing a closed one;
+default and tenant registries automatically replace closed cached instances.
+
+## LangChain callback behavior
+
+`CongineCallbackHandler` propagates every `CongineBaseException`, including
+strict validation failures, missing contracts, and lifecycle failures. It logs
+and contains unrelated host-library callback failures by returning `None`.
+Per-run results and `last_result` share one lock-backed state boundary.
+
+The worked example documents the integration in
+[`examples/LangChain/README.md`](examples/LangChain/README.md). Its deterministic
+offline path is the same command used by CI:
+
+```bash
+uv run --package congine-langchain-example python libs/congine-sdk/examples/LangChain/smoke.py
+```
+
 ---
 
 ## Configuration reference
@@ -79,7 +113,7 @@ Every field of `CongineConfig` is settable via `CONGINE_*` environment variables
 | `cache_sweep_interval_seconds` | `CONGINE_CACHE_SWEEP_INTERVAL_SECONDS` | `30.0` | Interval between proactive TTL sweeps by the cache daemon. |
 | `sync_enabled` | `CONGINE_SYNC_ENABLED` | `false` | Start the periodic background sync worker on `bootstrap()`. |
 | `sync_interval_seconds` | `CONGINE_SYNC_INTERVAL` | `300` | Background sync cadence. |
-| `semantic_validation_enabled` | `CONGINE_SEMANTIC_VALIDATION` | `false` | Compose the `jsonschema` validator on top of the rule engine. Also suppresses the unenforced-keyword warning, since those keywords are then enforced. |
+| `semantic_validation_enabled` | `CONGINE_SEMANTIC_VALIDATION` | `false` | Compose the full `jsonschema` validator on top of the rule engine. Contract admission remains a separate fail-closed boundary. |
 | `semantic_max_breaches` | `CONGINE_SEMANTIC_MAX_BREACHES` | `100` | Cap on breaches drained from the semantic validator; a `SEMANTIC_TRUNCATED` marker is appended when hit. |
 | `semantic_format_checking` | `CONGINE_SEMANTIC_FORMAT_CHECKING` | `false` | Enable jsonschema `format` assertions (off by default for safety). |
 | `drift_threshold` | `CONGINE_DRIFT_THRESHOLD` | `0.1` | KS **D-statistic** above which drift is flagged — not the p-value. Requires `[stats]`. |

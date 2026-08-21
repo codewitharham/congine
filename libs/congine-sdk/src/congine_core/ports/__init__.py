@@ -14,6 +14,7 @@ from congine_core.ports.lifecycle import IObservable, IStoppable
 from congine_core.ports.logger import ILogger
 from congine_core.ports.schema_storage import ISchemaStorage
 from congine_core.ports.semantic_validator import ISemanticValidator
+from congine_core.ports.sync_runner import ISyncRunner
 from congine_core.ports.validation_runner import IValidationRunner
 
 __all__ = [
@@ -24,6 +25,8 @@ __all__ = [
     "ISemanticValidator",
     "IValidationRunner",
     "ICircuitBreaker",
+    # Contract-sync seam: keeps the L4 worker off the L3 use case (P1)
+    "ISyncRunner",
     # Cross-cutting lifecycle/observability seams (audit Q8)
     "IStoppable",
     "IObservable",

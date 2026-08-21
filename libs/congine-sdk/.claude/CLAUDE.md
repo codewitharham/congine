@@ -40,20 +40,47 @@ outer layer. (`README.md` and `ARCHITECTURE.md` are the authoritative specs.)
 
 | Layer | Package                | Contents                                                                                                                                                                                   |
 | ----- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| L0    | `config`, `exceptions` | Frozen `CongineConfig`, exception hierarchy. Imported by all, depend on none.                                                                                                              |
-| L1    | `ports/`               | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`, `ICircuitBreaker`.                                    |
-| L2    | `domain/`              | Pure logic + immutable models: `RuleEngine`, `LocalValidator`, `CompositeValidator`, `BreachDetail`, `ValidationResult`. No I/O.                                                           |
+| L0    | `config`, `exceptions`, `models`, `security_limits`, `pii_sanitize` | Frozen `CongineConfig`, exception hierarchy, and the canonical value contracts (`BreachDetail`, `ValidationResult`, `TelemetryEvent`, `DriftResult`, `DegradedReason`). Imported by all, depend on none. |
+| L1    | `ports/`               | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`, `ICircuitBreaker`, `ISyncRunner`.                     |
+| L2    | `domain/`              | Deterministic judgment and rules: `RuleEngine`, `LocalValidator`, `CompositeValidator`, contract admission, schema vocabulary. No I/O.                                                     |
 | L3    | `usecases/`            | Stateless orchestration: `ValidateContractUseCase`, `SyncContractsUseCase`. Depends only on L1 ports.                                                                                      |
 | L4    | `infrastructure/`      | Side-effecting impls: `LFUCache`, `HttpContractRepository`, `FileContractRepository`, `QueueEventBus`, `BoundedValidationExecutor`, `CircuitBreaker`, `KSDriftEngine`, `StructuredLogger`. |
 | L5    | `adapters/`            | Composition root + framework entry points: `ServiceContainer`, `congine_guard`, `CongineCallbackHandler` (langchain).                                                                      |
 
 Critical layering rules when adding/moving code:
 
+- **The dependency rule is a matrix, not an ordering** (P1). Each layer may
+  import only what its row allows, and `tools/check_architecture.py` enforces it:
+
+  | Layer | May import |
+  | ----- | ---------- |
+  | L0    | L0 |
+  | L1    | L0, L1 |
+  | L2    | L0, L1, L2 |
+  | L3    | L0, L1, L2, L3 |
+  | L4    | L0, L1, **L4** — *not* L2, *not* L3 |
+  | L5    | L0, L1, L2, L3, L4, L5 |
+
+  The L4 row is the one to internalise: infrastructure implements capabilities
+  **declared by ports**, so it does not get to reach into domain or use cases
+  merely because they are numerically inward. If an L4 module needs an L3 type,
+  that is a missing port — add a narrow one (see `ports/sync_runner.py`).
+  **`TYPE_CHECKING` imports are enforced identically**; erasing an import at
+  runtime does not erase the architectural dependency. There are no allowlisted
+  exceptions, and adding one should be a last resort.
+- **Value contracts live in L0** (P1). `BreachDetail`, `ValidationResult`,
+  `TelemetryEvent`, `DriftResult` and `DegradedReason` are the vocabulary every
+  layer exchanges, so they sit in `congine_core/models.py` beside `config` and
+  `exceptions`. They previously lived in `domain/` (L2), which forced ports and
+  infrastructure into edges the gate had to ignore. The split is now: **L0 owns
+  canonical cross-layer value contracts; L2 owns deterministic judgment.**
+  `congine_core/domain/models.py` remains as a compatibility re-export — but it
+  keeps its L2 identity for the gate, so L1/L4 must import `congine_core.models`.
 - **Protocol placement.** Every protocol injected _across_ a layer boundary lives
   in `ports/` (L1). The sole exception is `IValidator` in `domain/validator.py` —
   an in-domain strategy seam that `LocalValidator`/`CompositeValidator` implement.
-  An L1 protocol may reference an L2 value object (e.g. `BreachDetail`) — that is
-  an inward reference; prefer a `TYPE_CHECKING` import to keep L1 import-light.
+  An L1 protocol referencing a value contract now imports it from L0, which is a
+  lawful inward reference; keep it under `TYPE_CHECKING` to stay import-light.
 - **Wiring.** `ServiceContainer.__init__` is the _only_ place concretes are
   constructed. It builds bottom-up (infra → domain → usecases) and injects via
   constructors. No module-level globals; the one sanctioned global is the lazy

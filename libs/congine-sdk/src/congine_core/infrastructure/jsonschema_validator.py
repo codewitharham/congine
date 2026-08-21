@@ -10,17 +10,18 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-import jsonschema  # type: ignore[import-untyped]
-from jsonschema import (  # type: ignore[import-untyped]
+import jsonschema
+from jsonschema import (
     Draft4Validator,
     Draft6Validator,
     Draft7Validator,
     Draft201909Validator,
     Draft202012Validator,
 )
-from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
+from jsonschema.exceptions import SchemaError
+from jsonschema.protocols import Validator
 
-from congine_core.domain.models import BreachDetail
+from congine_core.models import BreachDetail
 from congine_core.exceptions import CongineConfigurationError
 from congine_core.pii_sanitize import sanitize_breach_message
 from congine_core.security_limits import (
@@ -31,7 +32,7 @@ from congine_core.security_limits import (
 #: Maps a normalized ``jsonschema_draft`` config string to its validator class.
 #: Keys are stripped of non-alphanumerics and lower-cased (see ``_resolve_draft``)
 #: so spellings like ``"Draft 2020-12"``, ``"draft202012"`` and ``"2020"`` unify.
-_DRAFT_VALIDATORS: Dict[str, type] = {
+_DRAFT_VALIDATORS: Dict[str, type[Validator]] = {
     "draft202012": Draft202012Validator,
     "202012": Draft202012Validator,
     "2020": Draft202012Validator,
@@ -51,7 +52,7 @@ _DRAFT_VALIDATORS: Dict[str, type] = {
 }
 
 
-def _resolve_draft(draft: str) -> type:
+def _resolve_draft(draft: str) -> type[Validator]:
     """Map a ``jsonschema_draft`` config string to its validator class.
 
     Fail-closed: an unrecognised dialect raises :class:`CongineConfigurationError`
@@ -73,7 +74,7 @@ class JsonSchemaSemanticValidator:
 
     def __init__(
         self,
-        validator_cls: Optional[type[Any]] = None,
+        validator_cls: Optional[type[Validator]] = None,
         max_breaches: int = DEFAULT_SEMANTIC_MAX_BREACHES,
         format_checking: bool = False,
         jsonschema_draft: str = "draft202012",
@@ -88,7 +89,7 @@ class JsonSchemaSemanticValidator:
             ``"draft7"``) resolved to a validator class when *validator_cls* is
             ``None``. Unrecognised values fail closed (``CongineConfigurationError``).
         """
-        self._validator_cls = (
+        self._validator_cls: type[Validator] = (
             validator_cls
             if validator_cls is not None
             else _resolve_draft(jsonschema_draft)

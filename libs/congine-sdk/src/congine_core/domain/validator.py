@@ -13,7 +13,6 @@ import time
 
 import re2 as _re2  # type: ignore[import-untyped]
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -24,11 +23,10 @@ from typing import (
     runtime_checkable,
 )
 
-from congine_core.domain.models import BreachDetail, ValidationResult
+from congine_core.models import BreachDetail, ValidationResult
+from congine_core.exceptions import CongineConfigurationError
+from congine_core.ports.semantic_validator import ISemanticValidator
 from congine_core.security_limits import MAX_PATTERN_LENGTH, MAX_REGEX_VALUE_LENGTH
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.ports.semantic_validator import ISemanticValidator
 
 # Backward-compatible aliases for tests and external references.
 _MAX_PATTERN_LENGTH = MAX_PATTERN_LENGTH
@@ -496,6 +494,16 @@ class CompositeValidator:
             semantic_validator: A full-schema validator injected via its
                 Layer-1 protocol.
         """
+        if not isinstance(rule_validator, IValidator):
+            raise CongineConfigurationError(
+                "Invalid rule_validator: expected an implementation of IValidator"
+            )
+        if not isinstance(semantic_validator, ISemanticValidator):
+            raise CongineConfigurationError(
+                "Invalid semantic_validator: expected an implementation of "
+                "ISemanticValidator"
+            )
+
         self.rule_validator = rule_validator
         self.semantic_validator = semantic_validator
 

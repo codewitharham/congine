@@ -288,8 +288,7 @@ def test_snapshot_lock_timeout_propagates_to_portalocker(
 def test_semantic_validation_flag_reaches_sync_usecase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CONGINE_SEMANTIC_VALIDATION must reach SyncContractsUseCase so the
-    unenforced-keyword diagnostic knows whether those keywords are enforced."""
+    """The sync use case needs the active evaluator set for admission."""
     _baseline_env(monkeypatch, CONGINE_SEMANTIC_VALIDATION="true")
 
     container = ServiceContainer.from_env()
@@ -303,7 +302,7 @@ def test_semantic_validation_flag_reaches_sync_usecase(
 def test_semantic_validation_defaults_false_in_sync_usecase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Absent the env var, the sync use case defaults to the diagnostic being on."""
+    """Absent the env var, admission judges only native evaluator capabilities."""
     _baseline_env(monkeypatch)
 
     container = ServiceContainer.from_env()

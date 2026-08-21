@@ -175,7 +175,7 @@ jobs:
   python-lint:
     name: Python Lint (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: setup-dependencies
+    needs: [validate, setup-dependencies]
     strategy:
       fail-fast: false
       matrix:
@@ -204,17 +204,23 @@ jobs:
           npm ci
           uv sync --all-extras
 
-      - name: Run Ruff Lint (All Rules)
-        run: uv run --package congine-sdk ruff check libs/congine-sdk
+      - name: Run SDK Formatting and Lint Gates
+        run: npm exec nx -- run congine-sdk:lint
 
-      - name: Run Mypy Type Checking
-        run: uv run --package congine-sdk mypy libs/congine-sdk || true
+      - name: Run Blocking Production Type Check
+        run: npm exec nx -- run congine-sdk:typecheck
+
+      - name: Enforce Architecture Boundaries
+        run: npm exec nx -- run congine-sdk:architecture
+
+      - name: Run Offline LangChain Example
+        run: npm exec nx -- run congine-sdk:examples
 
   # Job 6: Python Unit & Integration Tests (Multi-version)
   python-test:
     name: Python Tests (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: setup-dependencies
+    needs: [validate, setup-dependencies]
     strategy:
       fail-fast: false
       matrix:

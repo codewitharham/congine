@@ -155,23 +155,22 @@ def test_recognised_types_mirror_json_type_map() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Q4: the scan is a required step for EVERY schema writer, not just one path
+# Q4: admission (which composes the scanner) is required for EVERY writer
 # --------------------------------------------------------------------------- #
 
 
-def test_every_schema_writer_scans_for_unenforced_keywords() -> None:
-    """Any module that writes a schema into ``ISchemaStorage`` must run the scan.
+def test_every_schema_writer_runs_contract_admission() -> None:
+    """Any module that writes into ``ISchemaStorage`` must run admission first.
 
-    The P0-2 warning is the only signal a user gets that part of their contract
-    is decorative, and it originally fired on exactly one path (the cache-prime
-    path in ``SyncContractsUseCase``). Every entry point on the roadmap — MCP
-    server, CLI, direct injection — adds another writer, and each one that
-    forgets silently reopens the false-safety foot-gun (audit Q4).
+    Contract admission is the fail-closed boundary that prevents decorative
+    policy from becoming active. Every entry point on the roadmap — MCP server,
+    CLI, direct injection — adds another writer, and each one that forgets
+    silently reopens the false-safety foot-gun (audit Q4).
 
     This walks the real source tree with ``ast`` and fails when a new
     ``*.put(contract_id, schema, ...)`` call site appears in a module that does
-    not reference the scan. If this fails on code you just wrote: call
-    ``find_unenforced_keywords`` on the schema and log what it returns.
+    not reference admission. If this fails on code you just wrote: call
+    ``admit_contract`` and refuse a non-admitted result before writing.
     """
     import ast
     from pathlib import Path
@@ -197,34 +196,31 @@ def test_every_schema_writer_scans_for_unenforced_keywords() -> None:
         ]
         if not writes:
             continue
-        if (
-            "find_unenforced_keywords" in source
-            or "_warn_unenforced_keywords" in source
-        ):
+        if "admit_contract" in source or "_admit" in source:
             continue
         lines = sorted({node.lineno for node in writes})
         offenders.append(f"{path.relative_to(src_root)}:{lines}")
 
     assert not offenders, (
-        "These modules write schemas into ISchemaStorage without running the "
-        "unenforced-keyword scan (audit Q4): " + "; ".join(offenders)
+        "These modules write schemas into ISchemaStorage without contract "
+        "admission (audit Q4): " + "; ".join(offenders)
     )
 
 
-def test_the_writer_guard_would_catch_a_new_unscanned_loader() -> None:
-    """Guard the guard: the detector must actually fire on an unscanned writer.
+def test_the_writer_guard_would_catch_a_new_unadmitted_loader() -> None:
+    """Guard the guard: the detector must fire on an unadmitted writer.
 
     Without this, a broken detector would pass silently forever and the
     convention above would be enforcement theatre.
     """
     import ast
 
-    unscanned_loader = (
+    unadmitted_loader = (
         "def load(storage, contracts, ttl):\n"
         "    for c in contracts:\n"
         "        storage.put(c['id'], c['schema'], ttl)\n"
     )
-    tree = ast.parse(unscanned_loader)
+    tree = ast.parse(unadmitted_loader)
     writes = [
         node
         for node in ast.walk(tree)
@@ -234,4 +230,4 @@ def test_the_writer_guard_would_catch_a_new_unscanned_loader() -> None:
         and len(node.args) == 3
     ]
     assert len(writes) == 1
-    assert "find_unenforced_keywords" not in unscanned_loader
+    assert "admit_contract" not in unadmitted_loader

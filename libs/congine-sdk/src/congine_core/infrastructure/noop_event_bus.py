@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.domain.models import TelemetryEvent
+    from congine_core.models import TelemetryEvent
 
 
 class NoOpEventBus:
