@@ -1,22 +1,66 @@
 # CONGINE — CURRENT ARCHITECTURE (verified)
 
-> **Superseded implementation snapshot (2026-08-21).** This forensic document
-> describes commit `a561992` plus its noted working tree and is retained as
-> historical evidence until the planned P3 reconciliation. For current closure
-> status, use `docs/_suite/hardening/P0_COMPLETION_REPORT.md`,
-> `docs/_suite/hardening/P1_PRE_CHANGE_VERIFICATION.md`, and
-> `docs/_suite/hardening/P1_COMPLETION_REPORT.md`. In particular, its test
-> counts and open P0/P1 debt tables are not statements about the post-P1
-> codebase.
+## Current state — verified against P1 CLOSED
 
-**Generated:** 2026-08-09 · **Commit:** `a561992c69bf5ca334492706314f6ffc9d5ece10` (branch
-`ahmed-main-v2`), **plus an uncommitted working tree** carrying the P0-2 change ·
+| | |
+|---|---|
+| **Verified against commit** | `b482bc4b2c88273e2a29a0f418a53f7ba3ab0614` (P1 closure) |
+| **Branch** | `P1_CLOSED_PHASE1` |
+| **P0 parent** | `1258a982b7dca2caac38de07256a8339575edbf6` |
+| **Repository HEAD at reconciliation** | `7fd9f0d8d70fd3ade4eb76514b6077d55110eba6` — `b482bc4` plus one founder commit deleting three user-owned SDK audit files; **no source, test or configuration change** |
+| **Verification status** | **P0 CLOSED · P1 CLOSED · P1.5 NEXT** · P2 / P3 / Phase A–F NOT STARTED |
+| **Reconciled** | 2026-08-22 |
+
+**Package root:** `libs/congine-sdk/src/congine_core/` — **40 Python files** across six layers
+(L0 root 6 · L1 `ports/` 10 · L2 `domain/` 5 · L3 `usecases/` 3 · L4 `infrastructure/` 12 ·
+L5 `adapters/` 4).
+
+**Measured baseline at P1 closure:**
+
+| Metric | Value |
+|---|---|
+| Test suite | **613 passed, 1 skipped** (40 test files) |
+| Architecture gate | 40 source files scanned · **90 architecture tests** |
+| Architecture allowlist entries | **0** |
+| `TYPE_CHECKING` exemptions | **0** |
+| Strict mypy (production source) | **0 issues**, 40 files — blocking, no `\|\| true` in CI |
+| Ruff lint + format | clean |
+| Exported ports (`congine_core.ports.__all__`) | **10** |
+| `CongineConfig` fields | **48** |
+| Root public surface (`congine_core.__all__`) | **57** |
+| P0 trust baseline | **5 / 5** categories green (§14.11) |
+
+> **Document provenance — read this before citing anything.** This file began as
+> a forensic reverse-engineering of commit `a561992` (2026-08-09), which predates
+> both P0 and P1. It has since been reconciled against the P1 CLOSED tree and is
+> now the **primary current-state context-transfer artifact** for the repository.
+>
+> Two kinds of content therefore coexist, and they are labelled:
+>
+> - **Current state** — reconciled against `b482bc4`. Safe to cite as "what
+>   CONGINE does today".
+> - **Historical measurement / drift analysis** — dated, attributed to the commit
+>   it measured, and retained because it explains *why* the architecture is
+>   shaped the way it is. §2 is entirely of this kind, as are the pre-P0 rows of
+>   the debt register (§16).
+>
+> Where the two disagree, **current state governs**. Statements carrying an old
+> commit's measurements are not claims about the post-P1 codebase. Closure detail
+> lives in `docs/_suite/hardening/P0_COMPLETION_REPORT.md` and
+> `docs/_suite/hardening/P1_COMPLETION_REPORT.md`.
+>
+> **What this reconciliation is, and is not.** This pass is the **post-P1
+> context-source reconciliation** — aligning the two context-source layers (this
+> document and `docs_v4/`) with the P1 CLOSED tree, so future sessions inherit
+> accurate context. It is **not P3**. **P3 is the full formal documentation and
+> ADR reconciliation** — D1, D2, D3, the F01–F09 suite and ADR stabilization —
+> and it remains **NOT STARTED**. The **W1** documentation site and **W2**
+> control-plane prototype sit **downstream of P3**: they consume the reconciled
+> documentation and do not define its completion.
+
 **Supersedes:** the 2026-06-14 audit set (`docs/system-analysis/00_SYSTEM_MAP.md`,
 `docs/system-analysis/01_FILE_INVENTORY.md`, `docs/context/01_SYSTEM_STATE.md`,
-`docs/context/02_COMPONENT_MAP.md`)
-
-**Package root:** `libs/congine-sdk/src/congine_core/` — 37 Python files, 31 implementation modules,
-5 075 lines. **Test suite at time of writing: 293 passed, 1 skipped** (34 test files).
+`docs/context/02_COMPONENT_MAP.md`).
 
 ---
 
@@ -44,7 +88,9 @@ result. Where something could not be determined, it is marked `UNVERIFIED:` with
 | **load shed** | a validation rejected before it ran, because capacity was exhausted |
 | **standalone** | `local_contracts_dir` is set: file repository, **no sync worker allocated at all** |
 | **L0–L5** | the six tiers (§3) |
-| **TC edge** | an import guarded by `if TYPE_CHECKING:` — no runtime dependency |
+| **TC edge** | an import guarded by `if TYPE_CHECKING:` — erased at runtime, but **still an architectural dependency** and enforced against the layer matrix (§4.4) |
+| **the layer matrix** | the explicit table of permitted inter-layer dependencies (§3.1). Not a numeric ordering |
+| **the architecture gate** | `libs/congine-sdk/tools/check_architecture.py` plus `tests/architecture/`, run by `nx run congine-sdk:architecture` |
 
 **Citation.** Section numbers are stable. Cite as `ARCHITECTURE_CURRENT.md §9.3`.
 
@@ -79,33 +125,57 @@ Everything else in the codebase exists to make that one hot path safe:
 - **safe across tenants** — per-tenant caches, snapshots, breakers and containers (§14.6)
 
 **The shape.** A strict six-tier hexagon (L0 kernel → L1 ports → L2 domain → L3 use cases →
-L4 infrastructure → L5 adapters), with dependencies pointing inward only. This was re-verified by
-AST analysis of every import in all 37 files, distinguishing runtime edges from `TYPE_CHECKING`
-edges: **no violations were found** (§4.4). The hexagon is real, and it is the asset — six of the
-nine planned future capabilities attach as pure additions behind seams that already exist (§15.10).
+L4 infrastructure → L5 adapters). CONGINE follows a ports-and-adapters inward-dependency principle,
+implemented through an **explicit layer dependency matrix rather than numeric layer ordering**
+(§3.1). Inner policy layers do not depend on outer mechanisms, and infrastructure communicates with
+policy and orchestration **through ports**, never through concrete reverse dependencies — so
+`L4 → L2` and `L4 → L3` are forbidden even though 2 and 3 are numerically inward.
 
-**What is genuinely good.** The composition root is the only construction site — sixteen
-constructions, one file, zero exceptions. The ports are real duck-typed seams, proven by test fakes
-that satisfy them without importing them. The bounded executor's permit accounting is subtle and
-correct. All eleven invariants in §14 hold.
+The matrix is **mechanically enforced** at `nx run congine-sdk:architecture`, over runtime *and*
+`TYPE_CHECKING` imports, with **zero allowlist entries and zero exemptions** (§4.4). The hexagon is
+real, and it is the asset — six of the nine planned future capabilities attach as pure additions
+behind seams that already exist (§15.10).
+
+**What is genuinely good.** The composition root is the only construction site — one file, zero
+exceptions — and since P1 its construction is **transactional**: a partially built container rolls
+back every resource it had already acquired. The ports are real duck-typed seams, proven by test
+fakes that satisfy them without importing them, and now additionally checked at composition time by
+`runtime_checkable` Protocol validation. The bounded executor's permit accounting is subtle and
+correct. The invariants in §14 hold.
 
 **What a reader must not miss.** Three things, each covered in full below:
 
-1. **A union `type` declaration (`{"type": ["string","null"]}`) — legal, idiomatic JSON Schema —
-   makes every validation against that contract degrade silently, forever** (§13.6, debt D18).
-2. **The rule engine reads eight schema keywords. Everything else — `minLength`, `format`, `const`,
-   `additionalProperties`, `items`, `allOf` — is silently ignored** unless semantic validation is
-   on (§13.1, §13.2). Since P0-2 this is *warned about at load*, but only on the cache-prime path.
-3. **`region` is a fully validated, documented configuration field that nothing reads** (§12.4,
-   debt D1).
+1. **Enforcement and conformance are different questions.** `ValidationResult.is_pass()` alone
+   cannot tell you whether the policy was evaluated — a degraded result carries `status="fail"`
+   with zero breaches. Ask `is_enforced()` first (§13.3, §14.10). "Not evaluated" must never be
+   read as "conforming".
+2. **Enforceability is decided at admission, not silently at evaluation.** The native rule engine
+   reads 10 keywords; the optional semantic evaluator adds 33 more; `format` needs a further flag.
+   A contract carrying semantics the *active evaluator stack* cannot enforce is **refused at
+   admission** rather than quietly becoming decorative policy (§13.1, §13.2). The one remaining way
+   to bypass that boundary — writing straight to `ISchemaStorage.put()` — is a **known, documented
+   deferral**, not a solved problem (§16, D-ADM).
+3. **`region` is metadata and does not select an endpoint.** Only `CONGINE_BASE_URL` chooses a
+   control plane; setting a region without one is a **configuration error**, not a silent fallback
+   (§12.4). A governance SDK must never infer a credential destination.
 
-**Since the 2026-06-14 audit.** P0-1 (safe tenant eviction) landed and is committed. P0-2
-(unenforced-keyword warning) landed and is **uncommitted** in the working tree. One prior debt claim
-turned out to be wrong in direction. Full reconciliation in §2.
+**Programme state.** P0 (trust-critical hardening) and P1 (structural hardening) are both **CLOSED**;
+**P1.5** (semantic validation safety) is next. §2 is the historical drift analysis from the pre-P0
+snapshot and is retained as history; §16 carries the reconciled debt register with each item marked
+resolved, open or deferred.
 
 ---
 
 ## 2. Drift report — what changed since 2026-06-14
+
+> **HISTORICAL SECTION — measurements from commit `a561992` (2026-08-09), pre-P0.**
+> Every count, file inventory and debt status below describes the tree *as it was
+> then*, and is retained because the reconciliation it performs explains how the
+> module-count and debt discrepancies in the earlier audit set were resolved. It
+> is **not** a statement about the post-P1 codebase: the package now holds 40
+> source files and the suite is 613 passed / 1 skipped (see the header table).
+> References to P0-1 and P0-2 as "recently landed" or "uncommitted" describe that
+> moment; both are long since committed and P0 as a whole is closed.
 
 ### 2.1 The module-count discrepancy, resolved
 
@@ -158,8 +228,10 @@ audit date, plus an uncommitted working tree:
 | `requires-python` raised to `>=3.11`; classifiers extended to 3.14 | `pyproject.toml` | committed |
 | LangChain example added (`examples/LangChain/`) | example tree | committed |
 
-Nothing else in `src/` changed. Test suite today: **293 passed, 1 skipped** (34 `test_*.py` files,
-286 `def test_` definitions; the collected count is higher because of parametrisation).
+Nothing else in `src/` changed. Test suite **at `a561992` (2026-08-09)**: 293 passed, 1 skipped
+(34 `test_*.py` files, 286 `def test_` definitions; the collected count is higher because of
+parametrisation). *The current baseline is **613 passed, 1 skipped** across 40 test files — see the
+header table. The intervening baselines were 350/1, 436/1, 478/1 (P0 closure) and 540/1.*
 
 ### 2.3 Claim-by-claim verdict on the prior documents
 
@@ -285,6 +357,30 @@ Six tiers, L0–L5. The tier of a file is determined by its directory, except L0
 loose modules at the package root. Every file in the package is assigned below; the assignment is
 exhaustive.
 
+**The dependency rule is a matrix, not an ordering.** Read a row as "a module in this layer may
+import these layers":
+
+| Layer | May import |
+|---|---|
+| **L0** Kernel | L0 |
+| **L1** Ports | L0, L1 |
+| **L2** Domain | L0, L1, L2 |
+| **L3** Use Cases | L0, L1, L2, L3 |
+| **L4** Infrastructure | L0, L1, **L4** — *not* L2, *not* L3 |
+| **L5** Adapters / Composition | L0, L1, L2, L3, L4, L5 |
+
+The consequential rejections: **`L4 → L2` FORBIDDEN · `L4 → L3` FORBIDDEN · `L3 → L4` FORBIDDEN ·
+`L1 → L2` FORBIDDEN · `L0 → L2` FORBIDDEN**.
+
+The L4 row is the one to internalise. Infrastructure implements capabilities *declared by ports*, so
+it does **not** acquire permission to depend on domain or use cases merely because those layers are
+numerically inward. Dependency inversion is the entire purpose of L1; an infrastructure module
+importing a use case has bypassed it. When L4 genuinely needs an L3 capability, the answer is a
+narrow port — see `ISyncRunner` (§5) — not a concrete reverse dependency.
+
+Expressing this as `target_layer <= source_layer` is **wrong**, and was the precise defect P1 found
+and fixed in the architecture gate (§4.4). `TYPE_CHECKING` imports obey the identical matrix.
+
 ```mermaid
 graph TD
     subgraph L5["L5 · adapters/ — composition root + entry points"]
@@ -304,56 +400,90 @@ graph TD
         KS["KSDriftEngine"]
         SLOG["StructuredLogger"]
         BGS["BackgroundSyncWorker"]
-        VT["ValidationTimer (DEPRECATED, unwired)"]
     end
     subgraph L3["L3 · usecases/ — stateless orchestration"]
         VUC["ValidateContractUseCase"]
         SUC["SyncContractsUseCase"]
     end
     subgraph L1["L1 · ports/ — typing.Protocol seams"]
-        P["ISchemaStorage · IContractRepository · IEventBus<br/>ILogger · ISemanticValidator<br/>IValidationRunner · ICircuitBreaker"]
+        P["ISchemaStorage · IContractRepository · IEventBus<br/>ILogger · ISemanticValidator<br/>IValidationRunner · ICircuitBreaker · ISyncRunner"]
+        LC["IStoppable · IObservable<br/>(lifecycle seams)"]
     end
-    subgraph L2["L2 · domain/ — pure logic + immutable models"]
+    subgraph L2["L2 · domain/ — deterministic judgment"]
         RE["RuleEngine (6 rules)"]
         LV["LocalValidator · CompositeValidator"]
         IVAL["IValidator (in-domain strategy seam)"]
-        VO["BreachDetail · ValidationResult<br/>TelemetryEvent · DriftResult"]
-        SVOC["schema_vocabulary (P0-2)"]
+        ADM["contract_admission"]
+        SVOC["schema_vocabulary"]
+        COMPAT["models.py<br/>(compatibility re-export, L2 identity)"]
     end
     subgraph L0["L0 · shared kernel (package root)"]
         CFG["config.py"]
         EXC["exceptions.py"]
         SEC["security_limits.py"]
         PII["pii_sanitize.py"]
+        VO["models.py — canonical value contracts<br/>BreachDetail · ValidationResult<br/>TelemetryEvent · DriftResult · DegradedReason"]
     end
 
     L5 --> L4
     L5 --> L3
     L5 --> L2
+    L5 --> L1
     L5 --> L0
     L4 --> L1
-    L4 --> L2
     L4 --> L0
-    L3 --> L1
     L3 --> L2
+    L3 --> L1
     L3 --> L0
+    L2 --> L1
     L2 --> L0
-    L1 -. "TYPE_CHECKING only" .-> L2
+    L1 --> L0
 ```
+
+> **No `L4 → L2` and no `L4 → L3` edge appears above, and that is the point.**
+> Infrastructure reaches policy only through L1. The canonical value contracts it
+> needs (`BreachDetail`, `TelemetryEvent`, …) live in L0, which is why the edge
+> `L4 → L0` carries them.
 
 ### 3.1 L0 — Shared kernel
 
-**Responsibility.** Constants, policy, and vocabulary that every layer may name. Contains the one
-mutable-by-configuration object in the system (`CongineConfig`) and the one exception tree.
+**Responsibility.** Constants, policy, vocabulary, and **the canonical cross-layer value contracts**
+that every layer may name. Contains the one configuration object in the system (`CongineConfig`),
+the one exception tree, and the immutable value types that cross architectural boundaries.
 
 **Forbidden from:** importing any port, domain type, use case, concrete, or adapter. Doing any I/O
 other than reading environment variables.
 
-| File | Lines | What it is |
-|---|---|---|
-| `config.py` | 363 | `CongineConfig` (frozen, 46 fields), `Region`, `FailMode`, `DeploymentMode`, `from_env()`, `validate()`, `is_local_base_url()`, `effective_log_safe_fields()` |
-| `exceptions.py` | 82 | 1 root + 6 canonical exception classes + 4 Tier-2 aliases |
-| `security_limits.py` | 33 | 8 numeric bounds |
+**P1 reclassification — value contracts moved L2 → L0.** `BreachDetail`, `ValidationResult`,
+`TelemetryEvent`, `DriftResult` and `DegradedReason` previously lived in `domain/models.py` and were
+treated as L2. They are not judgment logic; they are the value vocabulary that ports, domain,
+infrastructure and adapters all exchange. Filing them as L2 forced L1 and L4 into `L1 → L2` and
+`L4 → L2` dependencies that the architecture gate had to ignore to stay green. Moving them to L0
+makes those edges inward and lawful, which is what allows the matrix in §3 to be enforced with
+**zero exemptions**.
+
+The split is now: **L0 owns canonical cross-layer value contracts; L2 owns deterministic judgment.**
+
+**The L0 admission principle.** This is deliberately *not* an invitation to move shared classes into
+the kernel. A type belongs in L0 only when it is **all** of:
+
+- pure — data, not behaviour that makes decisions;
+- dependency-light — standard library only, no internal imports;
+- cross-layer canonical — genuinely exchanged across boundaries, not merely reused;
+- free of I/O;
+- free of outer-layer dependencies;
+- not orchestration.
+
+`congine_core/models.py` satisfies every one: it imports `dataclasses`, `datetime`, `enum` and
+`typing`, and nothing else. "All domain concepts belong in L0" is **not** the rule, and L0 must not
+become a dumping ground for shared classes.
+
+| File | What it is |
+|---|---|
+| `config.py` | `CongineConfig` (frozen, **48 fields**), `Region`, `FailMode`, `DeploymentMode`, `ContractSource`, `ContractAdmissionMode`, `from_env()`, `validate()`, `is_local_base_url()`, `effective_log_safe_fields()` |
+| `exceptions.py` | 1 root + canonical exception classes (including `CongineLifecycleError`, added in P1) + Tier-2 aliases |
+| `models.py` | **Canonical value contracts** — `BreachDetail`, `ValidationResult`, `TelemetryEvent`, `DriftResult`, `DegradedReason`. All frozen; stdlib-only imports |
+| `security_limits.py` | numeric bounds |
 | `pii_sanitize.py` | 26 | `sanitize_breach_message()` |
 | `__init__.py` | 135 | the public `__all__` surface + `__version__` |
 
@@ -372,42 +502,76 @@ of the L0 *directory*. Any automated layering check must exempt this file.
 **Responsibility.** Declare, as `typing.Protocol`, every seam across which an implementation is
 injected. No logic, no state, no imports that create runtime coupling.
 
-**Forbidden from:** containing implementation; importing L2/L3/L4/L5 at runtime; importing L0 (it
-does not need to — port signatures are expressed in builtins and L2 value objects).
+**Forbidden from:** containing implementation; importing L2/L3/L4/L5 — **including under
+`TYPE_CHECKING`**. Port signatures are expressed in builtins and **L0 canonical value contracts**.
 
-| File | Lines | Protocol | Runtime imports | TYPE_CHECKING imports |
-|---|---|---|---|---|
-| `ports/schema_storage.py` | 60 | `ISchemaStorage` | — | — |
-| `ports/contract_repository.py` | 48 | `IContractRepository` | — | — |
-| `ports/event_bus.py` | 31 | `IEventBus` | — | `domain.models.TelemetryEvent` |
-| `ports/logger.py` | 34 | `ILogger` | — | — |
-| `ports/semantic_validator.py` | 39 | `ISemanticValidator` | — | `domain.models.BreachDetail` |
-| `ports/validation_runner.py` | 95 | `IValidationRunner` | — | — |
-| `ports/circuit_breaker.py` | 32 | `ICircuitBreaker` | — | — |
-| `ports/__init__.py` | 26 | aggregate re-export of all seven | the seven port modules | — |
+| File | Protocol | Runtime imports | TYPE_CHECKING imports |
+|---|---|---|---|
+| `ports/schema_storage.py` | `ISchemaStorage` (composes `IStoppable`) | `ports.lifecycle` | — |
+| `ports/contract_repository.py` | `IContractRepository` | — | — |
+| `ports/event_bus.py` | `IEventBus` | — | `congine_core.models.TelemetryEvent` (L0) |
+| `ports/logger.py` | `ILogger` | — | — |
+| `ports/semantic_validator.py` | `ISemanticValidator` | — | `congine_core.models.BreachDetail` (L0) |
+| `ports/validation_runner.py` | `IValidationRunner` (composes `IObservable`) | `ports.lifecycle` | — |
+| `ports/circuit_breaker.py` | `ICircuitBreaker` | — | — |
+| `ports/sync_runner.py` | **`ISyncRunner`** — *new in P1* | — | — |
+| `ports/lifecycle.py` | `IStoppable`, `IObservable` — cross-cutting seams | — | — |
+| `ports/__init__.py` | aggregate re-export (**10 exported names**) | the port modules | — |
 
-**Boundary check: clean.** Two ports name an L2 value object, both exclusively under
-`TYPE_CHECKING` (`event_bus.py:16-17`, `semantic_validator.py:18-19`). Importing any port at runtime
-therefore drags in nothing. All seven are `@runtime_checkable`.
+**Boundary check: clean, and now for a stronger reason.** Two ports name a value contract, both
+exclusively under `TYPE_CHECKING` — but those contracts now live in **L0**, so the edges are
+`L1 → L0` and lawful. Before P1 they pointed at L2, which the matrix forbids; the gate only tolerated
+them because it exempted `TYPE_CHECKING` entirely. Both the exemption and the edges are gone.
+Importing any port at runtime still drags in nothing beyond `ports.lifecycle`. All are
+`@runtime_checkable`.
+
+**Do not hardcode a port count.** This catalogue was historically described as "seven ports"; the
+current export surface is **10 names** (8 functional protocols including `ISyncRunner`, plus the two
+lifecycle seams). Derive it from `congine_core.ports.__all__` rather than quoting a number.
 
 ### 3.3 L2 — Domain
 
-**Responsibility.** The deterministic validation core and the immutable value objects that flow
-through the system. This is the layer whose correctness the product sells.
+**Responsibility.** The deterministic validation core — judgment and rules. This is the layer whose
+correctness the product sells. Since P1 the immutable value objects it operates on live in L0
+(§3.1); L2 owns the *deciding*, not the *vocabulary*.
 
 **Forbidden from:** any I/O, any thread, any clock other than `time.perf_counter` for measurement,
-any import of L1 at runtime, any import of L3/L4/L5 at all.
+any import of L3/L4/L5 at all.
 
-| File | Lines | What it is |
-|---|---|---|
-| `domain/models.py` | 102 | `BreachDetail`, `ValidationResult`, `DriftResult`, `TelemetryEvent` — all `frozen=True` |
-| `domain/validator.py` | 461 | `RuleEngine` (6 static rules), `IValidator` (in-domain Protocol), `LocalValidator`, `CompositeValidator`, helpers `_compiled_pattern`, `_path_present`, `_type_matches`, `_JSON_TYPE_MAP` |
-| `domain/schema_vocabulary.py` | 144 | **new since baseline** — `find_unenforced_keywords()` plus the four keyword frozensets |
-| `domain/__init__.py` | 28 | aggregate re-export |
+| File | What it is |
+|---|---|
+| `domain/validator.py` | `RuleEngine` (6 static rules), `IValidator` (in-domain Protocol), `LocalValidator`, `CompositeValidator`, helpers `_compiled_pattern`, `_path_present`, `_type_matches`, `_JSON_TYPE_MAP` |
+| `domain/contract_admission.py` | `admit_contract()` and the admission result/issue/code/level types — the boundary that decides whether a contract may become active policy |
+| `domain/schema_vocabulary.py` | `find_unenforced_keywords()` plus the keyword frozensets (`NATIVE_ENFORCED_KEYWORDS`, `SEMANTIC_ENFORCED_KEYWORDS`, …) |
+| `domain/models.py` | **compatibility re-export only** — see below |
+| `domain/__init__.py` | aggregate re-export |
 
-**Boundary check: clean.** `domain/validator.py` imports `domain.models` and `security_limits`
-(inward) plus the third-party `re2` leaf, and names `ISemanticValidator` only under `TYPE_CHECKING`
-(`:30-31`). `domain/models.py` and `domain/schema_vocabulary.py` import nothing from the package.
+**The compatibility re-export.** `domain/models.py` no longer defines anything. It re-exports the
+five value contracts from `congine_core.models` so the historical import path keeps working:
+
+| Import path | Status |
+|---|---|
+| `from congine_core.models import BreachDetail` | **canonical** |
+| `from congine_core import BreachDetail` | supported public path (root `__all__`) |
+| `from congine_core.domain import BreachDetail` | supported public path (`domain.__all__`) |
+| `from congine_core.domain.models import BreachDetail` | compatibility path |
+
+All four resolve to the **same class object**. What changed is the canonical `__module__`, which now
+reads `congine_core.models`; code asserting on `__module__`, or pickling these types across a
+version boundary, would observe that. The relocation was **not** byte-identical, and should not be
+described as such — public symbol identity, semantics and supported export paths were preserved.
+
+**The compatibility path is not an architectural escape hatch.** The architecture gate resolves
+`congine_core.domain.models` by its directory, so it retains **L2 identity**. An L1 or L4 module
+importing through it still fails the gate and must name `congine_core.models` directly. This is
+pinned by
+`tests/architecture/test_layer_dependencies.py::test_infrastructure_cannot_reach_domain_through_the_compatibility_shim`.
+
+**Boundary check: clean.** `domain/validator.py` imports `congine_core.models`, `exceptions` and
+`security_limits` (all L0) plus the third-party `re2` leaf, and imports `ISemanticValidator` from
+`ports/` at runtime (`:28`) so `CompositeValidator` can structurally verify its injected collaborator.
+That is an `L2 → L1` edge, which the matrix permits — depending on an *abstraction* is dependency
+inversion working, not a violation. `domain/schema_vocabulary.py` imports nothing from the package.
 The domain imports no infrastructure. This is the single most important boundary in the system and
 it holds.
 
@@ -467,38 +631,56 @@ diagnostic set (capped at 4096, `:41`, `:292-293`) and affects nothing but log v
 **Responsibility.** Every concrete that touches a thread, a socket, a file, a clock, or a
 third-party engine. Each implements an L1 port structurally — none subclasses one.
 
-**Forbidden from:** importing L5; importing another L4 concrete; constructing its own collaborators
-(everything is constructor-injected).
+**Forbidden from:** importing L5; **importing L2 or L3 in any form, including under
+`TYPE_CHECKING`**; importing another L4 concrete; constructing its own collaborators (everything is
+constructor-injected).
 
-| File | Lines | Port implemented | Notes |
-|---|---|---|---|
-| `infrastructure/bounded_executor.py` | 208 | `IValidationRunner` | stdlib only |
-| `infrastructure/lfu_cache.py` | 245 | `ISchemaStorage` | stdlib only |
-| `infrastructure/circuit_breaker.py` | 126 | `ICircuitBreaker` | stdlib only |
-| `infrastructure/logger.py` | 111 | `ILogger` | stdlib only |
-| `infrastructure/http_contract_repository.py` | 273 | `IContractRepository` | `httpx`, `portalocker` |
-| `infrastructure/file_contract_repository.py` | 164 | `IContractRepository` | optional `yaml` |
-| `infrastructure/queue_event_bus.py` | 296 | `IEventBus` | `httpx` |
-| `infrastructure/noop_event_bus.py` | 40 | `IEventBus` | stdlib only |
-| `infrastructure/jsonschema_validator.py` | 175 | `ISemanticValidator` | `jsonschema` |
-| `infrastructure/ks_drift.py` | 156 | **none** | optional `numpy` |
-| `infrastructure/background_sync.py` | 97 | **none** | drives L3 |
-| `infrastructure/timer.py` | 81 | (`IValidationRunner`-shaped) | **DEPRECATED, not wired, not exported** |
-| `infrastructure/__init__.py` | 39 | — | deliberately omits `ValidationTimer` (`:22-25`) |
+| File | Port implemented | Notes |
+|---|---|---|
+| `infrastructure/bounded_executor.py` | `IValidationRunner` | stdlib only |
+| `infrastructure/lfu_cache.py` | `ISchemaStorage` | stdlib only |
+| `infrastructure/circuit_breaker.py` | `ICircuitBreaker` | stdlib only |
+| `infrastructure/logger.py` | `ILogger` | stdlib only |
+| `infrastructure/http_contract_repository.py` | `IContractRepository` | `httpx`, `portalocker` |
+| `infrastructure/file_contract_repository.py` | `IContractRepository` | optional `yaml` |
+| `infrastructure/queue_event_bus.py` | `IEventBus` | `httpx`; names `TelemetryEvent` from **L0** |
+| `infrastructure/noop_event_bus.py` | `IEventBus` | stdlib only; names `TelemetryEvent` from **L0** |
+| `infrastructure/jsonschema_validator.py` | `ISemanticValidator` | `jsonschema`; imports `BreachDetail` from **L0** |
+| `infrastructure/ks_drift.py` | **none** | optional `numpy`; imports `DriftResult` from **L0** |
+| `infrastructure/background_sync.py` | **none** | drives an `ISyncRunner` (**L1**) |
+| `infrastructure/__init__.py` | — | aggregate re-export |
 
-**Boundary check: clean.** No L4 file imports an adapter. No L4 file imports another L4 file. Four
-of the twelve concretes (`bounded_executor`, `lfu_cache`, `circuit_breaker`, `logger`) have zero
-internal imports at all — they are pure mechanisms.
+`infrastructure/timer.py` (`ValidationTimer`) was **REMOVED IN P1**. It was deprecated, unwired and
+never exported, and its only consumer was its own test file. Bounded validation is the sole
+responsibility of `BoundedValidationExecutor`, which is what the container actually wires.
 
-**Arguable placement — two L4 files implement no port.** `KSDriftEngine` and `BackgroundSyncWorker`
-sit in L4 but fulfil no L1 contract. `KSDriftEngine` is a *library capability* the host calls
-directly through the container (`dependency_injection.py:370-403`), so nothing injects it and no
-seam is needed — but that also means it cannot be substituted. `BackgroundSyncWorker` is a
-*mechanism that drives a policy*: it holds an L3 use case and calls it on a timer. It is the only L4
-file that depends on L3, which it does under `TYPE_CHECKING` only (`background_sync.py:21-24`), so
-there is no runtime upward edge — but the conceptual direction is genuinely outward-driving-inward,
-which is what a scheduler is. Both placements are defensible; both are the reason "every L4 file
-implements an L1 port" cannot be stated as an invariant.
+**Boundary check: clean, and mechanically enforced.** No L4 file imports an adapter, another L4
+concrete, or **any L2/L3 module**. Four of the concretes (`bounded_executor`, `lfu_cache`,
+`circuit_breaker`, `logger`) have zero internal imports at all — they are pure mechanisms.
+
+**`BackgroundSyncWorker` no longer depends on L3.** This is the canonical worked example of the
+ports-and-adapters model in this codebase, and of the P1 correction. The worker is a *mechanism that
+drives a policy*: it wakes on a timer and needs exactly one capability from its collaborator,
+`sync_once()`. It previously held a `SyncContractsUseCase` typed under `TYPE_CHECKING` — an
+`L4 → L3` edge that escaped the gate only because `TYPE_CHECKING` was exempt.
+
+P1 named that single obligation as a narrow L1 port:
+
+```
+L3 SyncContractsUseCase  ──structurally satisfies──▶  L1 ISyncRunner
+                                                          ▲
+                                                          │ depends on
+                                              L4 BackgroundSyncWorker
+```
+
+`SyncContractsUseCase` required **no change** — it already had `sync_once(self) -> int`. The
+dependency is now `L4 → L1`, and the composition root remains the only place the two are connected.
+Do not describe `BackgroundSyncWorker` as depending on the concrete use case.
+
+**Arguable placement — one L4 file implements no port.** `KSDriftEngine` is a *library capability*
+the host calls directly through the container, so nothing injects it and no seam is needed — but that
+also means it cannot be substituted. That is the remaining reason "every L4 file implements an L1
+port" cannot be stated as an invariant.
 
 ### 3.6 L5 — Adapters
 
@@ -583,42 +765,81 @@ target; every row must satisfy `target ≤ source` (inward) except where noted.
 
 ### 4.3 Complete TYPE_CHECKING-only edge list
 
-Six edges exist for typing alone and create no runtime dependency. Five of the six point *outward*
-(inner layer naming an outer type), which is exactly why they are guarded.
+**`TYPE_CHECKING` is an import-weight optimisation, not an architectural exemption.** Since P1 these
+edges are evaluated against the same layer matrix as runtime imports (§3): a module that needs the
+concrete type of an outer implementation knows about that implementation whether or not the import
+survives to runtime. Every edge below is therefore *lawful under the matrix on its own merits* —
+guarding buys lighter imports and nothing else.
 
-| Source | L | Target | L | Line | Why it must be guarded |
-|---|---|---|---|---|---|
-| `ports/event_bus` | 1 | `domain.models.TelemetryEvent` | 2 | `:16-17` | keeps L1 import-light; importing a port must not drag in the domain |
-| `ports/semantic_validator` | 1 | `domain.models.BreachDetail` | 2 | `:18-19` | same |
-| `domain/validator` | 2 | `ports.semantic_validator.ISemanticValidator` | 1 | `:30-31` | **outward** — the domain must not import a port at runtime |
-| `infrastructure/noop_event_bus` | 4 | `domain.models.TelemetryEvent` | 2 | `:19-20` | keeps the offline bus dependency-free |
-| `infrastructure/queue_event_bus` | 4 | `domain.models.TelemetryEvent`, `ports.circuit_breaker.ICircuitBreaker` | 2, 1 | `:29-31` | inward anyway; kept light |
-| `infrastructure/background_sync` | 4 | `usecases.sync_contracts_usecase.SyncContractsUseCase` | 3 | `:21-24` | **outward** — L4 must not import L3 at runtime |
-| `adapters/dependency_injection` | 5 | `domain.models.DriftResult` | 2 | `:36-37` | return-type annotation only |
-| `adapters/langchain_handler` | 5 | `dependency_injection.ServiceContainer`, `domain.models.ValidationResult` | 5, 2 | `:18-20` | avoids eager import of the container |
+| Source | L | Target | L | Verdict |
+|---|---|---|---|---|
+| `ports/event_bus` | 1 | `congine_core.models.TelemetryEvent` | **0** | L1 → L0, allowed |
+| `ports/semantic_validator` | 1 | `congine_core.models.BreachDetail` | **0** | L1 → L0, allowed |
+| `infrastructure/noop_event_bus` | 4 | `congine_core.models.TelemetryEvent` | **0** | L4 → L0, allowed |
+| `infrastructure/queue_event_bus` | 4 | `congine_core.models.TelemetryEvent` | **0** | L4 → L0, allowed |
+| `infrastructure/queue_event_bus` | 4 | `ports.circuit_breaker.ICircuitBreaker` | 1 | L4 → L1, allowed |
+| `adapters/dependency_injection` | 5 | `congine_core.models.DriftResult` | **0** | L5 → L0, allowed |
+| `adapters/langchain_handler` | 5 | `dependency_injection.ServiceContainer` | 5 | same-layer, allowed |
+| `adapters/langchain_handler` | 5 | `congine_core.models.ValidationResult` | **0** | L5 → L0, allowed |
 
-The two rows marked **outward** are the load-bearing ones. `domain/validator.py:30-31` is what lets
-`CompositeValidator` be typed against `ISemanticValidator` without the domain depending on `ports/`,
-and `background_sync.py:21-24` is what lets a scheduler hold a use case without L4 depending on L3.
-Reclassify either as a runtime import and the hexagon breaks.
+**Two edges that used to be here are gone, and their absence is the P1 result.** The pre-P1 table
+listed `domain/validator → ports.semantic_validator` and
+`infrastructure/background_sync → usecases.sync_contracts_usecase`, describing both as "outward"
+edges that the `TYPE_CHECKING` guard made safe, and warning that reclassifying either as a runtime
+import "breaks the hexagon". That reasoning was the defect:
+
+- **`background_sync → SyncContractsUseCase` was a genuine `L4 → L3` violation**, not a
+  guard-legitimised exception. It is now `L4 → L1` via `ISyncRunner` (§3.5).
+- **`domain/validator → ISemanticValidator` is now a plain runtime import**
+  (`domain/validator.py:28`), because P1's `runtime_checkable` Protocol check in
+  `CompositeValidator.__init__` needs the class object at runtime. Far from breaking the hexagon,
+  `L2 → L1` is explicitly permitted by the matrix — the domain depending on an *abstraction* is
+  dependency inversion working as designed, not a violation.
+
+The remaining `L1 → L0` and `L4 → L0` rows are lawful only because the value contracts were moved to
+the kernel. Under the old L2 placement each was an `L1 → L2` or `L4 → L2` violation that the
+`TYPE_CHECKING` exemption concealed.
 
 ### 4.4 Verification results
 
-**Claim 1 — dependencies point inward only.** Verified against the table in §4.2. Every runtime edge
-targets a layer at or below its source, with two categories of exception, both accounted for:
+> **This section was rewritten during P1 closure.** Its earlier form asserted
+> that "every runtime edge targets a layer at or below its source", verified by
+> AST analysis that reported **no violations**. That analysis ran, and its result
+> was correctly reported — but the *rule it encoded was insufficient*. See
+> "Claim 1" below. The history is retained deliberately: a green gate that
+> proved nothing is the most instructive finding in this document.
 
-- **Intra-layer edges** (`config`→`exceptions`, the five aggregate `__init__.py` files,
-  `guard`→`dependency_injection`, `langchain_handler`→`dependency_injection`). These are
-  same-layer, not upward.
-- **The package-root `__init__.py`** (§4.5).
+**Claim 1 — dependencies obey the explicit layer matrix.** Verified mechanically by
+`tools/check_architecture.py` against the matrix in §3, over runtime **and** `TYPE_CHECKING` edges.
 
-**Claim 2 — no inner layer imports an outer concrete.** Verified. The strongest form of this claim
-holds: no L0/L1/L2/L3 module names any `infrastructure.*` or `adapters.*` symbol at runtime *or*
-under `TYPE_CHECKING`. The only inner→outer references at all are the two `TYPE_CHECKING` edges in
-§4.3, and both target an **abstraction or an L3 policy**, never an L4/L5 concrete.
+The earlier formulation of this claim — *"every runtime edge targets a layer at or below its
+source"* — is **not** CONGINE's dependency model, and the checker that encoded it as
+`target_layer <= source_layer` was **green for the wrong reason**. Because `2 < 4` and `3 < 4`, it
+silently permitted `L4 → L2` and `L4 → L3`. Seven forbidden edges were live in the tree at P1 entry,
+two of them runtime imports, and the gate reported zero violations. Two of its own self-tests
+encoded the wrong rule directly.
 
-**Claim 3 — no circular imports.** Verified empirically: all 37 modules import successfully as the
-first Congine import in a fresh interpreter.
+P1 replaced the numeric comparison with an explicit `_ALLOWED_DEPENDENCIES` matrix and removed all
+seven edges structurally — six by relocating the canonical value contracts to L0 (§3.1, §3.3), one
+by introducing the `ISyncRunner` port (§3.5). **Current result: zero violations, zero allowlist
+entries, zero `TYPE_CHECKING` exemptions**, over 40 source files.
+
+**The gate was falsified, not merely observed passing.** Deliberately re-injecting three removed
+edges into a scratch copy produced exactly three violations — `L4 → L3` at runtime, `L4 → L2`
+through the compatibility re-export, and `L1 → L2` under `TYPE_CHECKING`. All three were accepted
+silently by the previous rule. Self-tests grew **17 → 90**, asserting all 36 layer pairs in both
+runtime and `TYPE_CHECKING` form, alongside the retained coverage for import aliases, nested
+functions and classes, literal `__import__`, literal `importlib.import_module`, package-root
+aggregator misuse, and shadow/collision attempts.
+
+**Claim 2 — no inner layer imports an outer concrete.** Verified, and now in its strongest form: no
+L0/L1/L2/L3 module names any `infrastructure.*` or `adapters.*` symbol at runtime *or* under
+`TYPE_CHECKING`, and no L4 module names any `domain.*` or `usecases.*` symbol in either form. The
+inner→outer `TYPE_CHECKING` edges that previously existed have been eliminated rather than exempted.
+
+**Claim 3 — no circular imports.** Verified empirically at P1 closure: all 39 submodules import
+successfully as the first Congine import in a fresh interpreter. The L0 relocation did not introduce
+a cycle — `congine_core/models.py` imports nothing from the package.
 
 **Claim 4 — the composition root is the sole construction site.** Verified by searching for
 constructor calls of every L4 concrete outside `dependency_injection.py`:
@@ -640,16 +861,20 @@ constructor calls of every L4 concrete outside `dependency_injection.py`:
 | `ValidateContractUseCase` | `:301` | no |
 | `SyncContractsUseCase` | `:313` | no |
 | `BackgroundSyncWorker` | `:329` | no |
-| `ValidationTimer` | **never** | no — deprecated and unwired |
 
-Sixteen constructions, one file, zero exceptions. `httpx.Client` is the only third-party object
+Sixteen constructions, one file, zero exceptions — the count still reproduces at P1 closure.
+`ValidationTimer` was removed in P1 and no longer appears. **The line numbers in this table are from
+the `a561992` snapshot and have since shifted; treat the "constructed in the composition root /
+nowhere else" fact as current, and re-measure the positions if you need them.** `httpx.Client` is the only third-party object
 constructed outside `dependency_injection.py` (`http_contract_repository.py:116` creates a
 per-request `AsyncClient`; `queue_event_bus.py:75` holds a fallback factory) — but in the wired
 configuration the container supplies the factory (`:275-277`), so even the HTTP client's
 configuration is centralised.
 
-**Violations found: none.** Two structural observations that are *not* violations but that any
-future automated check must encode are recorded in §4.5 and §4.6.
+**Violations found: none** — and, since P1, that statement is backed by a gate whose own rule has
+been tested. The two structural observations in §4.5 and §4.6 are *not* violations; both are now
+encoded in `tools/check_architecture.py` and covered by its self-tests, which is exactly what
+"any future automated check must encode" was asking for.
 
 ### 4.5 The one outward edge, and why it is correct
 
@@ -792,10 +1017,49 @@ graph LR
 
 ## 5. Ports and adapters catalogue
 
-Eight seams exist: the seven `ports/` Protocols plus the in-domain `IValidator`. All eight are
-`@runtime_checkable` `typing.Protocol`s, so conformance is structural — the test fakes in
-`tests/conftest.py` satisfy them without importing or subclassing anything (**CC-7**), which is the
-proof that these are genuine duck-typed seams rather than ABCs in disguise.
+All seams are `@runtime_checkable` `typing.Protocol`s, so conformance is structural — the test fakes
+in `tests/conftest.py` satisfy them without importing or subclassing anything (**CC-7**), which is
+the proof that these are genuine duck-typed seams rather than ABCs in disguise.
+
+**Derive the catalogue, do not quote a count.** This section was historically introduced as
+"the seven `ports/` Protocols plus the in-domain `IValidator`". That figure is stale and the phrase
+"seven ports" should not be reused. The authoritative list is `congine_core.ports.__all__`, which at
+P1 closure exports **10** names:
+
+| Port | Kind |
+|---|---|
+| `ISchemaStorage` | functional (composes `IStoppable`) |
+| `IContractRepository` | functional |
+| `IEventBus` | functional (declares its own widened `stop(drain=...)`) |
+| `ILogger` | functional |
+| `ISemanticValidator` | functional |
+| `IValidationRunner` | functional (composes `IObservable`) |
+| `ICircuitBreaker` | functional |
+| **`ISyncRunner`** | functional — **added in P1** (§5.8) |
+| `IStoppable` | cross-cutting lifecycle seam |
+| `IObservable` | cross-cutting observability seam |
+
+Plus **`IValidator`**, which deliberately does *not* live in `ports/`. It is an **in-domain strategy
+seam**: both implementations (`LocalValidator`, `CompositeValidator`) live in `domain/validator.py`,
+and it is never used to inject an outer-layer concrete inward. The rule the codebase follows is
+precise — **a Protocol lives in `ports/` if and only if something outside L2 implements it.**
+`IValidator` is the only Protocol that fails that test and the only one outside `ports/`. It has not
+been moved for documentation tidiness, and should not be.
+
+**Runtime Protocol validation (P1).** Composition seams now verify their injected collaborators with
+`isinstance` against these `runtime_checkable` Protocols and raise `CongineConfigurationError`
+naming the rejected role and the expected Protocol. Know what that does and does not prove:
+
+| Mechanism | Proves |
+|---|---|
+| strict mypy | static type and signature compatibility |
+| `runtime_checkable` Protocol check | **early structural compatibility** — the methods exist |
+| behavioural tests | the semantic obligations below |
+
+A `runtime_checkable` Protocol check inspects **method presence, not signatures or behaviour**. It
+catches a mis-wired container at construction instead of at the first hot-path call; it does **not**
+establish that an implementation honours the obligations listed per-port. Do not describe it as
+proof of behavioural conformance.
 
 For each port: the exact method surface (signatures, not paraphrases), every implementation in the
 tree, and the obligations a new implementation must satisfy. The obligations column is derived from
@@ -1070,20 +1334,59 @@ excluded from the package `__all__` (`congine_core/__init__.py:83-135`).
 
 ### 5.9 Summary: the declared port surface vs. the required port surface
 
-The gap between what the Protocols declare and what `ServiceContainer` actually calls is worth
-stating once, plainly, because it is the trap a would-be extender falls into.
+**This gap is now closed (debt D14 — RESOLVED).** The section is retained because the *principle* it
+established still governs: **if `ServiceContainer` calls a method on a component, that method belongs
+on the port.** A port that under-declares makes a faithful implementation crash in `close()` or
+`health()`.
 
-| Port | Declared methods | Additionally required by the container | Consequence of implementing only the Protocol |
-|---|---|---|---|
-| `ISchemaStorage` | `get`, `put`, `clear`, `exists` | `size()`, `stop()` | `health()` and `close()` raise `AttributeError` |
-| `IEventBus` | `publish` | `queue_depth()`, `stop(drain)`; `dropped_total()` optional | `health()` and `close()` raise `AttributeError` |
-| `IValidationRunner` | `capacity`, `run_with_timeout`, `run_with_timeout_async`, `health` | `in_flight`, `rejected_total`, `shutdown(wait)` | `health()` and `close()` raise `AttributeError` |
-| `IContractRepository` | `fetch_active_contracts`, `load_snapshot`, `save_snapshot` | `snapshot_lock_path` (genuinely optional — `getattr` guarded) | single-flight degrades silently, nothing raises |
-| `ILogger`, `ISemanticValidator`, `ICircuitBreaker`, `IValidator` | as declared | none | — |
+The fix was `ports/lifecycle.py`, holding two small composable seams that the functional ports
+compose rather than mix in:
 
-Three of the eight seams have an undeclared lifecycle/observability surface. `NoOpEventBus`
-documents this in its own docstring (`noop_event_bus.py:10-12`) — it implements `queue_depth`,
-`dropped_total` and `stop` for no reason other than container symmetry. Recorded as debt D14 in §16.
+| Port | How its full surface is now declared |
+|---|---|
+| `ISchemaStorage` | composes **`IStoppable`** (`stop()`); declares `size()` explicitly |
+| `IValidationRunner` | composes **`IObservable`** (`health()`); declares `shutdown(wait)` explicitly |
+| `IEventBus` | declares its own widened **`stop(drain=True)`** plus `queue_depth()` |
+| `IContractRepository` | `snapshot_lock_path` remains **genuinely optional**, `getattr`-probed; single-flight degrades rather than raising |
+| `ILogger`, `ISemanticValidator`, `ICircuitBreaker`, `ISyncRunner`, `IValidator` | as declared; no undeclared surface |
+
+Two deliberate exceptions remain, both documented rather than accidental:
+
+- **`in_flight` / `rejected_total` are no longer read as attributes.** `ServiceContainer.health()`
+  reads them out of the mapping returned by the declared `health()` method, so an implementation
+  that satisfies `IObservable` needs no extra attributes.
+- **`dropped_total()` is optional by design**, probed with `getattr` and called only when callable.
+
+Keeping lifecycle in separate composable protocols rather than folding it into each functional port
+means a port still describes **one job**: `ISchemaStorage` is about caching schemas, `IEventBus`
+about publishing events. Lifecycle is composed in, not mixed in.
+
+### 5.10 `ISyncRunner` — `ports/sync_runner.py` (new in P1)
+
+```python
+@runtime_checkable
+class ISyncRunner(Protocol):
+    def sync_once(self) -> int: ...
+```
+
+| Implementation | Location | Notes |
+|---|---|---|
+| `SyncContractsUseCase` | `usecases/sync_contracts_usecase.py` | production; satisfies structurally, **unchanged by P1** |
+
+**Why it exists.** `BackgroundSyncWorker` (L4) previously held a `SyncContractsUseCase` (L3) — an
+`L4 → L3` dependency hidden under `TYPE_CHECKING`. The worker calls exactly one method on its
+collaborator, so P1 named that single obligation as a port. The edge became `L4 → L1`, and the
+concrete use case needed no modification. This is the worked example to imitate when an
+infrastructure mechanism needs to drive a policy: **add a narrow port, do not import the use case.**
+
+**Obligations for a new implementation.**
+
+- **Must return the number of contracts now cached.** The worker logs it; the boot path uses it.
+- **May raise.** The worker catches every exception from a pass so one failure never kills the loop —
+  which means an implementation must surface failure through its **own** logging and telemetry
+  rather than relying on the caller to report it.
+- **Must be safe to call repeatedly on a daemon thread**, at the configured interval, for the life
+  of the container.
 
 ---
 
@@ -1274,7 +1577,7 @@ answer to "what exists in my process?"
 
 ```mermaid
 flowchart TB
-    CFG["CongineConfig (frozen, 46 fields)"]
+    CFG["CongineConfig (frozen, 48 fields)"]
 
     CFG --> LOG["logger := StructuredLogger"]
     CFG --> EX["validation_executor := BoundedValidationExecutor"]
@@ -1329,7 +1632,7 @@ case), `control_plane_http_timeout_seconds` on both consumers, `snapshot_lock_ti
 through to `portalocker`, and — newly added — `semantic_validation_enabled` reaching
 `SyncContractsUseCase`.
 
-The contract holds for 45 of 46 fields. The exception is `region`, analysed in §12.4.
+The contract held for 45 of the 46 fields measured at `a561992`; the one exception was `region`, which P0 has since resolved (§12.4). `CongineConfig` now has **48** fields — **measure the current surface with `dataclasses.fields(CongineConfig)` rather than quoting a count from this document.**
 
 ---
 
@@ -1356,14 +1659,30 @@ The hard constraints are: logger first (steps 2→3-9), breaker before bus (3→
 before composite validator (6→7), use cases before the worker (8→9), and `_standalone` before the
 worker branch (4→9).
 
-**Construction starts threads.** Steps 3 and 5 can each start a daemon thread before the constructor
-returns, if `start_background_services` is true: `LFUCache` starts `congine_cache_sweeper` in its own
-`__init__` (`lfu_cache.py:67-74`) and `QueueEventBus` starts `congine_event_bus`
-(`queue_event_bus.py:87-94`). Both also register `atexit` hooks at that moment. **A container that
-raises later in `__init__` therefore leaks two threads and two `atexit` registrations** — there is no
-`try/except` around the remaining steps. The realistic trigger is step 6: a bad
-`CONGINE_JSONSCHEMA_DRAFT` makes `JsonSchemaSemanticValidator` raise `CongineConfigurationError` at
-`:281`, *after* the sweeper and drain threads are running. Recorded as debt D10 in §16.
+**Construction starts threads — and is now transactional.** Steps 3 and 5 can each start a daemon
+thread before the constructor returns, if `start_background_services` is true: `LFUCache` starts
+`congine_cache_sweeper` in its own `__init__` and `QueueEventBus` starts `congine_event_bus`. Both
+also register `atexit` hooks at that moment.
+
+**Debt D10 — RESOLVED BY P1.** This paragraph previously recorded that a container raising later in
+`__init__` "leaks two threads and two `atexit` registrations", because nothing wrapped the remaining
+steps. The realistic trigger was step 6: a bad `CONGINE_JSONSCHEMA_DRAFT` makes
+`JsonSchemaSemanticValidator` raise `CongineConfigurationError` *after* the sweeper and drain threads
+are already running.
+
+Construction is now **transactional**. If any step fails, every resource already acquired is rolled
+back — each cleaned **exactly once**, in reverse order — and the invariant verified by
+fault-injection tests is:
+
+- no leaked background worker thread;
+- no leaked HTTP client or other owned client;
+- no stale lifecycle hook — `atexit` registrations owned by the partially built container are
+  unregistered;
+- **the original failure remains visible** — rollback never masks the exception that caused it;
+- a subsequent clean construction succeeds.
+
+Rollback ownership is explicit: the container releases what *it* acquired. Components retained by a
+caller after their owning container closes remain unsupported.
 
 ### 7.2 `bootstrap()` — `:346-358`
 
@@ -1438,20 +1757,51 @@ Each step's blocking behaviour matters:
 
 | Step | Can it block? | Bound |
 |---|---|---|
-| `sync_worker.stop()` | yes | `thread.join(timeout=interval_seconds + 1.0)` (`background_sync.py:77`) — **up to 301 s at defaults** |
-| `schema_storage.stop()` | yes | `sweeper.join(timeout=sweep_interval + 1.0)` (`lfu_cache.py:245`) — up to 31 s |
-| `event_bus.stop(drain=True)` | yes | flushes the whole queue with the full retry/backoff budget, then `daemon.join(timeout=2.0)` (`queue_event_bus.py:127-141`) |
-| `validation_executor.shutdown(wait=False)` | no | returns immediately |
+| `sync_worker.stop()` | yes | `thread.join(timeout=_WORKER_JOIN_TIMEOUT_SECONDS)` — **≤ 2 s**, no longer scaled by `sync_interval_seconds` |
+| `validation_executor.shutdown(wait=False)` | no | `thread_pool.shutdown(wait=False)` returns immediately |
+| `event_bus.stop(drain=True)` | yes | `daemon.join(timeout=_WORKER_JOIN_TIMEOUT_SECONDS)` — **≤ 2 s**. The final drain runs **on the daemon thread**, so a slow or unreachable control plane cannot extend the caller's close |
+| `schema_storage.stop()` | yes | `sweeper.join(timeout=_WORKER_JOIN_TIMEOUT_SECONDS)` — **≤ 2 s** |
+| concurrent second caller | yes | `_close_complete.wait(timeout=_CONCURRENT_CLOSE_WAIT_SECONDS)` — **≤ 8 s**, then returns |
 
-`close()` is therefore **not** a fast operation, and step 2's join bound scales with
-`sync_interval_seconds`. In practice the `threading.Event.wait` in each loop wakes promptly on
-`stop()`, so the real cost is small — but the *worst case* is bounded by the interval, not by a
-short constant. `__exit__` (`:462-463`) calls `close()`, so `with ServiceContainer(cfg) as c:` has
-the same profile.
+**Interval-derived worker joins were replaced with fixed 2-second worker-join bounds (P1).** This
+table previously recorded joins scaled by the configured interval — "up to 301 s at defaults" for the
+sync worker and up to 31 s for the sweeper. Both are now fixed 2-second joins, so worst-case teardown
+no longer grows with configuration.
 
-**Idempotence.** `_closed`/`_close_lock` (`:206-207`, `:445-448`) make repeated `close()` a no-op —
-tested by `test_close_is_idempotent`. This matters because `atexit` hooks, `__exit__`, explicit
-`close()` and a deferred finalizer can all fire for the same container.
+**Overall `ServiceContainer` shutdown is composed of component-specific bounded lifecycle
+operations; there is no single global close timeout.** All identified synchronous lifecycle waits on
+the current close path have explicit finite bounds — the three fixed worker joins above, the
+non-blocking executor shutdown, and the concurrent-close waiter — and each teardown call is wrapped
+in `contextlib.suppress(Exception)`, so no failing component can propagate and skip the rest. What
+does **not** exist is a single end-to-end deadline governing the whole sequence; do not describe
+close as bounded by one constant. `__exit__` calls `close()`, so `with ServiceContainer(cfg) as c:`
+has the same profile.
+
+**Terminal, idempotent, and thread-safe.** `close()` moves the container through a one-way state
+machine:
+
+```
+OPEN ──close()──▶ CLOSED
+```
+
+- **Terminal.** `ServiceContainer.closed` reports the state and `ensure_open()` raises
+  `CongineLifecycleError` at supported container and adapter entry points. Use-after-close is **not**
+  reported as a degraded `ValidationResult` — degradation means enforcement was attempted and could
+  not complete, whereas using a terminal object is a caller error, and conflating the two would put a
+  host bug into the enforcement record (§14.10, G16).
+- **Idempotent.** Repeated `close()` is a no-op. This matters because `atexit` hooks, `__exit__`,
+  an explicit `close()` and a deferred finalizer can all fire for the same container.
+- **Thread-safe and deterministic under concurrency.** A second caller arriving mid-close waits on
+  the completion event, bounded by `_CONCURRENT_CLOSE_WAIT_SECONDS` (8 s), rather than racing the
+  teardown or returning early from a half-closed container.
+- **Hook ownership is cleaned up.** A normal `close()` unregisters the `atexit` hooks the container
+  owns, so a long-lived process that creates and closes many containers does not accumulate them.
+- **Registries never hand back a closed container.** Both the default singleton and the tenant
+  registry replace a cached-but-closed entry, and under concurrent callers exactly one replacement
+  becomes effective (§7.6, §7.7).
+
+Retained references to internal components after their owning container closes remain
+**unsupported**.
 
 ### 7.5 The deferred-teardown path — `_arm_deferred_teardown()` at `:422-437`
 
@@ -1569,7 +1919,7 @@ explicit-`config` path it validates that the config's identifiers match the argu
 | 7 | Evicted container held forever | Threads live forever, off-registry, invisible to `health()` | §7.7 |
 | 8 | `close()` racing a live validation | `shutdown(wait=False)` returns immediately; the in-flight future completes on a pool thread and publishes to a stopped bus | `:453` |
 | 9 | Two threads call `for_tenant` for two different new tenants | Fully serialised: `_tenant_lock` is held across `cls(config)` (`:165`), which itself starts threads. Container construction is on the critical path of every tenant lookup | `:129-166` |
-| 10 | `stop()` on `QueueEventBus` racing its own drain thread | `stop()` joins with a 2 s timeout, then closes `self._client` and sets it to `None` (`:139-141`). If the join times out while the daemon is mid-`_ship`, the daemon uses a closed client — `httpx` raises `RuntimeError`, which `_ship` does **not** catch (it catches only `httpx.HTTPError`, `:256`), so the exception escapes `_drain_loop` and kills the daemon thread with a traceback. Conversely a daemon calling `_get_client()` after `stop()` builds a fresh client that nothing will ever close | `queue_event_bus.py:127-147`, `:256` |
+| 10 | `stop()` on `QueueEventBus` racing its own drain thread — **RESOLVED BY P1** | `stop()` joins with a 2 s timeout, then closes `self._client` and sets it to `None` (`:139-141`). If the join times out while the daemon is mid-`_ship`, the daemon uses a closed client — `httpx` raises `RuntimeError`, which `_ship` does **not** catch (it catches only `httpx.HTTPError`, `:256`), so the exception escapes `_drain_loop` and kills the daemon thread with a traceback. Conversely a daemon calling `_get_client()` after `stop()` builds a fresh client that nothing will ever close | `queue_event_bus.py:127-147`, `:256` |
 | 11 | `_MAX_TENANTS` monkeypatched (tests) | Class-level state; leaks between tests unless reset. `tests/unit/test_container_tenant_lru.py:30-48` uses an autouse fixture for exactly this | — |
 
 ### 7.9 The lifecycle, drawn
@@ -1858,7 +2208,7 @@ observes at the guard boundary under the default `fail_mode=degrade`; divergence
 | 11 | **A `CongineBaseException` from inside the validator** | **re-raised unchanged** (`:77-78`) — deliberately not degraded | propagates to the host | whatever the raiser logged | **none** |
 | 12 | **Non-dict payload** | `LocalValidator.validate` short-circuits (`domain/validator.py:384-395`) | `status="fail"`, one `TYPE_MATCH`/`<root>` breach `"Payload must be an object/dict"`, `degraded=False` | per fail mode | published, one breach |
 | 13 | **Non-dict *schema*** (e.g. a string cached under a contract id) | `_extract_params` calls `schema.get(...)` → `AttributeError` → row 10 | `degraded=True, degraded_reason="internal_error"`. **Verified end-to-end** | ERROR, `error_type="AttributeError"` | published, empty breaches |
-| 14 | **Union / list `type` declaration** — e.g. `{"type": ["string","null"]}` | `_type_matches` does `_JSON_TYPE_MAP.get(json_type)` with an unhashable list ⇒ `TypeError: cannot use 'list' as a dict key` → row 10 | `degraded=True, degraded_reason="internal_error"` — **every validation against that contract degrades, silently, forever**. Verified end-to-end. Since P0-2 the *load* is warned about (`schema_vocabulary.py:99-101`, `find_unenforced_keywords` reports `field.type`), but only on the cache-prime path | ERROR `"Validation error"`, `error_type="TypeError"` | published, empty breaches |
+| 14 | **Union / list `type` declaration** — e.g. `{"type": ["string","null"]}` | **RESOLVED — no longer a failure path.** Evaluated correctly: the null member is honoured and a genuine type violation yields a real breach | `status="pass"` for a conforming or null value; `status="fail"` with one `TYPE_MATCH` breach otherwise. `degraded=False`, `is_enforced()=True`. Verified against P1 CLOSED (§13.6) | none | published, breaches as measured |
 | 15 | **Invalid regex pattern** in the schema | `re2.error` caught (`domain/validator.py:272-280`) | a normal `REGEX_PATTERN` breach `"Invalid regex pattern for '<field>'"` — **fails closed, does not degrade** | per fail mode; `re2` itself writes a line to stderr outside Congine's logger | published |
 | 16 | **Over-long regex pattern** (> `MAX_PATTERN_LENGTH` = 1000) | length-capped before compilation (`:252-260`) | `REGEX_PATTERN` breach `"Pattern for '<field>' exceeds the safe length budget"` — fail-closed | per fail mode | published |
 | 17 | **Over-long value for a regex field** (> `MAX_REGEX_VALUE_LENGTH` = 50 000) | length-capped (`:261-269`) | `REGEX_PATTERN` breach `"Value for '<field>' is too long to match safely"` | per fail mode | published |
@@ -2091,7 +2441,7 @@ across every thread:
 
 Three places where the analysis above turns up something a reader should not have to re-derive.
 
-**F1 — `QueueEventBus._client` is unguarded across a stop race** (state row 8). `stop()` closes the
+**F1 — `QueueEventBus._client` is unguarded across a stop race** (state row 8). **RESOLVED BY P1** — see the note at the end of this entry. `stop()` closes the
 client and sets it to `None` (`:139-141`) after a 2 s join timeout that may expire while the daemon
 is mid-`_ship`. Two outcomes: the daemon uses a closed client and `httpx` raises `RuntimeError`,
 which `_ship` does not catch (it catches only `httpx.HTTPError`, `:256`), so the exception escapes
@@ -2133,11 +2483,19 @@ Stated explicitly because each looks like one on a first read:
 
 ## 11. Data model
 
-Four value objects, all in `domain/models.py`, all `@dataclass(frozen=True)`. Nothing else in the
-system is a data-carrying type — everything else is either a mechanism, a configuration object
-(`CongineConfig`, also frozen), or a plain `dict` schema.
+**Five canonical value contracts, all in `congine_core/models.py` (L0), all frozen.** Four are
+`@dataclass(frozen=True)` — `BreachDetail`, `ValidationResult`, `DriftResult`, `TelemetryEvent` —
+and `DegradedReason` is a `StrEnum`. Nothing else in the system is a data-carrying type: everything
+else is a mechanism, a configuration object (`CongineConfig`, also frozen), or a plain `dict` schema.
 
-### 11.1 `BreachDetail` — `domain/models.py:15-27`
+> **Location changed in P1.** These types moved from `domain/models.py` (L2) to the L0 shared
+> kernel — see §3.1 for the rationale and §3.3 for the compatibility re-export that keeps
+> `congine_core.domain.models` importable. **The citations in this section are current**: they name
+> `models.py` and its present line ranges, following the same package-relative convention this
+> document uses for the other L0 modules (`config.py`, `exceptions.py`, `security_limits.py`).
+> `domain/models.py` now appears only where historical placement or the re-export is the subject.
+
+### 11.1 `BreachDetail` — `models.py:80-91`
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -2177,7 +2535,7 @@ reads them off the returned `ValidationResult`.
 iteration order within a rule (`validator.py:397-400`). The order is therefore deterministic for a
 given schema but is *not* a severity ranking.
 
-### 11.2 `ValidationResult` — `domain/models.py:30-52`
+### 11.2 `ValidationResult` — `models.py:95-148`
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -2213,7 +2571,7 @@ single most important thing for a consumer of this type to know.
 **Where consumed:** `_finalize` (telemetry + enforcement), `guard._finish` (`guard.py:63-72`),
 `CongineCallbackHandler` (`:102-104`), and the host.
 
-### 11.3 `DriftResult` — `domain/models.py:55-71`
+### 11.3 `DriftResult` — `models.py:152-167`
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -2235,7 +2593,7 @@ is wrong about the semantics of a user-facing knob. Recorded as debt D15 in §16
 returns it to the caller and, on detection, flattens four of the five fields into a `__drift__`
 `TelemetryEvent`.
 
-### 11.4 `TelemetryEvent` — `domain/models.py:74-102`
+### 11.4 `TelemetryEvent` — `models.py:171-198`
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -2276,7 +2634,36 @@ which emits exactly these six keys and ISO-formats `created_at`. `NoOpEventBus.p
 (`queue_event_bus.py:235-239`), not in the event body. Everything `docs_v2` describes as an extended
 telemetry event is §15 material.
 
-### 11.5 Cross-cutting properties
+### 11.5 `DegradedReason` — `models.py:35-76`
+
+A `StrEnum` (not a `@dataclass`), added by P0 to make "why was this not evaluated?" machine-readable.
+It is the mechanism behind invariant G14 (§14.10): the reason a result is degraded must be
+switchable-on by downstream code, never parsed out of human-readable message text.
+
+| Member | Wire value | Meaning |
+|---|---|---|
+| `TIMEOUT` | `"timeout"` | the validation callable exceeded `validation_timeout_ms` — it ran, too slowly |
+| `LOAD_SHED` | `"load_shed"` | the bounded executor was saturated, so the work **never ran** |
+| `RESOURCE_ERROR` | `"resource_error"` | `MemoryError` / `RecursionError` inside the validator |
+| `INTERNAL_ERROR` | `"internal_error"` | any other unexpected exception inside the validator |
+| `INVALID_PAYLOAD` | `"invalid_payload"` | the payload was not measurable, so its size bound could not be enforced |
+| `INVALID_CONTRACT` | `"invalid_contract"` | the cached schema was not measurable, so its size bound could not be enforced |
+
+Three details carry real weight:
+
+- **`StrEnum`, deliberately.** A plain `(str, Enum)` renders as `"DegradedReason.LOAD_SHED"` under
+  `str()`, f-strings and `%s`, so a single interpolation anywhere on the logging path would leak an
+  implementation name onto the wire. `StrEnum` renders as the value on every path. The wire values
+  are stable, so pre-existing comparisons such as `degraded_reason == "timeout"` still hold.
+- **`TIMEOUT` and `LOAD_SHED` are distinct on purpose.** "We evaluated too slowly" and "we did not
+  evaluate at all" are different facts about enforcement. `LoadShedError` subclasses `TimeoutError`
+  so existing `except TimeoutError` callers keep working, which makes the distinction easy to lose
+  by accident — the P0 evidence harness pins both directions (§14.11).
+- **What is deliberately absent.** A payload or schema that *exceeds* its budget is a genuine
+  deterministic verdict and produces an `INPUT_BOUNDS` **breach**, not a degradation. Only the
+  inability to reach a verdict belongs in this enum.
+
+### 11.6 Cross-cutting properties
 
 | Property | `BreachDetail` | `ValidationResult` | `DriftResult` | `TelemetryEvent` |
 |---|---|---|---|---|
@@ -2301,7 +2688,7 @@ handed to `do_validate` is captured by the closure, and although the *dict itsel
 
 ## 12. Configuration surface
 
-`CongineConfig` (`config.py:60-363`) is a `frozen=True` dataclass with **exactly 46 fields**, every
+`CongineConfig` is a `frozen=True` dataclass with **48 fields** at P1 closure (46 when this section was written; derive the number, do not quote it), every
 one of which maps 1:1 to a `CONGINE_*` environment variable read by `from_env()` (`:151-255`). Field
 count and env-var count were both enumerated programmatically and agree at 46.
 
@@ -2467,22 +2854,32 @@ audit's claim that it "undercounts vs the byte-named budget" is **inverted**. Se
 
 ### 12.4 Dead configurables
 
-**One field is defined, validated, documented, and never read: `region` (field 5).**
+**`region` — RESOLVED in P0. It is metadata, and its semantics are now explicit.**
 
-- Declared `config.py:73`.
-- Parsed and validated in `from_env()` `:154-159` — an invalid value raises
-  `CongineConfigurationError`, so it is not inert at load.
-- Assigned `:181`.
-- Documented in `README.md` as "`us` | `eu` | `apac`".
-- **Zero reads.** `grep -rn "region" src/congine_core/` returns exactly four hits, all inside
-  `config.py` itself (the enum definition, the field, the `from_env` parse, the constructor
-  argument). No concrete, no use case, no adapter consults it. It does not affect `base_url`, does
-  not select an endpoint, and does not appear in any header.
+The pre-P0 finding recorded here was that `region` was "defined, validated, documented, and never
+read", so a user setting `CONGINE_REGION=eu` expecting a Frankfurt/GDPR endpoint got no such
+behaviour and no warning (debt D1). Do **not** describe `region` that way any more — and do not
+describe it as "accepted but unread" either. Both readings are now wrong, in opposite directions.
 
-A user setting `CONGINE_REGION=eu` in the belief that it routes to a Frankfurt/GDPR endpoint gets no
-such behaviour and no warning. The enum's own comments (`config.py:40-42`, naming Virginia,
-Frankfurt (GDPR) and Singapore) actively encourage that belief. Given the compliance connotation,
-this is the most consequential dead knob the system could have. Recorded as debt D1 in §16.
+Current behaviour, verified at `config.py`:
+
+- **`region` does not select an endpoint.** `CONGINE_BASE_URL` is the only thing that chooses a
+  control plane.
+- **Setting a region without a base URL is a configuration error**, not a silent fallback to
+  loopback: `CongineConfig.base_url_from_env()` raises `CongineConfigurationError` stating that the
+  region declares a remote deployment while nothing selects an endpoint.
+- **`region` is normalised and validated** to the `Region` enum (`us` / `eu` / `apac`) through the
+  canonical `__post_init__` → normalize → validate path, identically under direct construction and
+  `from_env()`.
+- It is retained as a **deployment label** — metadata that travels with the configuration.
+
+**The intermediate state is instructive and must not be resurrected.** An earlier change (audit Q1)
+mapped each region to a default `base_url` of the form `https://api.{us,eu,apac}.congine.dev`. Those
+hostnames were never confirmed against a deployed control plane, so setting a region could ship an
+API key to an endpoint nobody had verified. P0 **reverted** it (audit P0-08) on the principle that
+**a governance SDK must never infer a credential destination**. Do not reintroduce placeholder
+regional hostnames, and do not document `region` as dynamically choosing a regional service unless
+code proves otherwise.
 
 No other field is dead. The four that look suspicious are all genuinely consumed via `self.` inside
 `config.py`'s own policy methods rather than via `config.<field>` at a call site: `require_https`
@@ -2492,11 +2889,17 @@ and `allow_cleartext` in `validate()`, `log_safe_fields` and `log_redaction_enab
 ### 12.5 Wired but undocumented
 
 `README.md`'s configuration reference table — described in `.claude/CLAUDE.md` as "the canonical,
-user-facing config doc" and the fourth touch of the mandatory 4-touch change — documents **27 of 46
-fields**. The table's own preamble claims "Every field of `CongineConfig` is settable via `CONGINE_*`
-environment variables", which is true, but the table does not list them.
+user-facing config doc" and the fourth touch of the mandatory 4-touch change — documented **27 of
+the 46 fields** present at `a561992`. The table's own preamble claims "Every field of
+`CongineConfig` is settable via `CONGINE_*` environment variables", which is true, but the table did
+not list them all.
 
-The 19 fields that are fully wired and functional but absent from the README:
+> **This class of drift is now guarded (debt D2).** `tests/unit/test_readme_config_table.py` fails
+> when a field is undocumented, misdocumented, or documented but nonexistent, so the table cannot
+> silently fall behind the dataclass again. The **27/46 ratio below is a historical measurement** —
+> the config surface is now 48 fields. Re-measure rather than quoting it.
+
+The 19 fields that were fully wired and functional but absent from the README at that time:
 
 | | | |
 |---|---|---|
@@ -2520,11 +2923,36 @@ as a p-value threshold; the code compares the D statistic (§11.3). Recorded as 
 
 ## 13. Contract semantics — safety-critical
 
-**Why this section exists.** Under the default configuration (`semantic_validation_enabled=False`)
-the only thing evaluating a contract is `LocalValidator` running six rules. Any schema keyword those
-rules do not read is **silently ignored**: the contract reports conformance while enforcing nothing.
-A user who writes `{"summary": {"type": "string", "minLength": 10}}` and sees `status="pass"` has no
-enforcement of `minLength` and no indication of that fact at validation time.
+**Why this section exists.** A contract that CONGINE cannot actually enforce must never be allowed to
+look enforced. That is the whole safety story, and P0 changed *where* it is decided.
+
+**Four distinct concepts. Do not conflate them.**
+
+| Concept | What it is | Where it lives |
+|---|---|---|
+| **Native rule vocabulary** | the 10 keywords `RuleEngine` evaluates in-process | §13.1, `domain/validator.py` |
+| **Semantic evaluator capability** | 33 further keywords the optional JSON Schema evaluator enforces when `semantic_validation_enabled=True`; `format` needs `semantic_format_checking` as well | `domain/schema_vocabulary.py`, `infrastructure/jsonschema_validator.py` |
+| **Contract admission** | the boundary deciding whether a contract may become **active policy**, judged against the capability set the wired evaluators actually provide | `domain/contract_admission.py` |
+| **Evaluation result** | whether a payload conformed, *and separately* whether it was evaluated at all | `ValidationResult` (§13.3) |
+
+**The governing rule (P0):** *a contract with semantics the active evaluator stack cannot enforce
+must not silently become active.* Admission composes the capability set from the evaluators the
+container actually wired — a per-keyword question, not an "is semantic validation on?" flag — and
+**refuses** a contract carrying anything outside it, recording the offending path and code. So the
+pre-P0 statement that unreadable keywords are "silently ignored" is **no longer the general
+behaviour** and must not be repeated as current.
+
+**The precise remaining exposure, stated honestly.** Admission guards the paths that *go through*
+it: the sync/cache-prime path and the public `admit_contract()` API. A caller who writes a schema
+straight into `ISchemaStorage.put()` bypasses the boundary, and for such a contract the old
+behaviour still applies — `{"summary": {"type": "string", "minLength": 10}}` evaluated by the native
+engine alone returns `status="pass"` with `minLength` unenforced. **Universal admission behind
+`ISchemaStorage` is a documented P1 deferral, not a solved problem** (§16, D-ADM). Document the
+bypass; do not document it as the normal path, and do not describe it as fixed.
+
+`find_unenforced_keywords()` remains the public scanner for this question and every schema writer is
+required to run it — enforced by
+`tests/unit/test_schema_vocabulary.py::test_every_schema_writer_scans_for_unenforced_keywords`.
 
 Every behaviour below was verified by executing it, not by reading it. Where a claim came out
 differently than the source reads, the executed result is what is recorded.
@@ -2556,11 +2984,16 @@ exactly three top-level keys and five per-property keys.
 `tests/unit/test_schema_vocabulary.py:119` (`test_vocabulary_matches_rule_engine`) is the drift
 guard that keeps the mirror honest.
 
-### 13.2 The keywords the rule engine silently ignores
+### 13.2 The keywords the rule engine does not read
+
+*(Section retitled during P1 reconciliation. It was "the keywords the rule engine silently ignores";
+"silently" is no longer accurate for any contract that passes through admission — see the §13
+preamble. What follows is the accurate statement of which evaluator covers what.)*
 
 Everything else. Because `find_unenforced_keywords` uses **allowlist** semantics (anything not
-enforced and not metadata is reported), the ignored set is open-ended by construction — which is the
-correct design, since JSON Schema keeps growing. The commonly-used members:
+enforced and not metadata is reported), the set outside the native engine is open-ended by
+construction — which is the correct design, since JSON Schema keeps growing. The commonly-used
+members, and the evaluator that covers each:
 
 | Category | Keywords | Enforced only when |
 |---|---|---|
@@ -2574,25 +3007,39 @@ correct design, since JSON Schema keeps growing. The commonly-used members:
 | Nested schemas | a property's own `properties` | same |
 
 **`const` and `additionalProperties` deserve a specific callout.** `const` is the natural way to pin
-a value and it does nothing. `additionalProperties: false` is the natural way to reject unexpected
-fields and it does nothing — the rule engine has no concept of an unexpected field at all, so a
-payload may carry arbitrary extra keys under any contract.
+a value; `additionalProperties: false` is the natural way to reject unexpected fields. Neither is
+understood by the native rule engine — it has no concept of an unexpected field at all, so under
+native rules alone a payload may carry arbitrary extra keys. Both are covered by the semantic
+evaluator. The consequence is now decided at admission: with that evaluator unwired, a contract
+using either keyword is **refused** rather than admitted-and-unenforced.
 
-Keywords treated as **metadata and deliberately never warned about**
-(`schema_vocabulary.py:37-50`): `description`, `title`, `default`, `examples`, `$comment`,
-`deprecated`, `readOnly`, `writeOnly`, `$schema`, `$id`.
+**`format` is the subtle one.** It sits in neither set by default. The semantic evaluator asserts
+formats only when `semantic_format_checking` is *additionally* enabled, so
+`SEMANTIC_ENFORCED_KEYWORDS` deliberately **excludes** it and the caller adds it to the capability
+set only when that flag is on. Listing `format` as covered whenever semantic validation is enabled
+would be precisely the false-safety claim admission exists to prevent — and the P0 evidence corpus
+tests exactly that case (§14.11).
 
-**The P0-2 mitigation, and its precise limits.** Since the working-tree change, priming a contract
-whose schema contains an unenforced keyword emits one WARNING naming the `field.keyword` paths
-(`sync_contracts_usecase.py:295-300`). Three limits matter:
+**From warning to refusal — how P0 closed this.** The mitigation first recorded here (audit P0-2)
+emitted a WARNING when priming a contract containing an unenforced keyword. **Detection was
+superseded by refusal**: `admit_contract()` now decides admission against the wired capability set,
+and an unenforceable contract is rejected rather than activated with a log line. The obsolete
+warning state was removed in P1, since it had become unreachable on the admission path.
 
-1. It fires **only on the cache-prime path** (`_prime_cache` → `_warn_unenforced_keywords`,
-   `:270`). A schema written directly with `schema_storage.put(...)` — which tests, embedders and
-   any future non-repository loader do — is never scanned.
-2. It is **non-recursive by design** (`schema_vocabulary.py:93-96`): a property carrying nested
-   `properties` or `items` is reported once at that field rather than enumerated. The whole subtree
-   is unenforced either way, so this is a noise decision, not a coverage gap.
-3. It is **detection, not enforcement**. Validation behaviour is unchanged.
+What survives, and its precise limits:
+
+1. **`find_unenforced_keywords()` remains the public scanner** and every schema writer must run it —
+   guarded by `test_every_schema_writer_scans_for_unenforced_keywords`. Admission consumes the same
+   vocabulary.
+2. The scan is **non-recursive by design**: a property carrying nested `properties` or `items` is
+   reported once at that field rather than enumerated. The whole subtree is unenforced either way,
+   so this is a noise decision, not a coverage gap.
+3. **The `schema_storage.put(...)` bypass is still real.** Admission covers the sync/cache-prime
+   path and the public API; a caller writing straight to storage skips it. This is the documented
+   D-ADM deferral (§16), and it is the one place where "admitted-but-unenforced" can still arise.
+
+Keywords treated as **metadata and deliberately never reported**: `description`, `title`, `default`,
+`examples`, `$comment`, `deprecated`, `readOnly`, `writeOnly`, `$schema`, `$id`.
 
 ### 13.3 Per-rule behaviour, with edge cases
 
@@ -2729,48 +3176,61 @@ Recorded as debt D16 in §16.
 Every one of these is fail-closed except the stream-buffer clip (silently truncates) and the
 `_MAX_WARNED_CONTRACTS` reset (re-warns after a clear).
 
-### 13.6 The two malformed-schema shapes that degrade instead of failing
+### 13.6 Malformed-schema shapes — one resolved, one contained
 
-Both were verified end-to-end through `ValidateContractUseCase`, and both are more dangerous than a
-breach because the caller sees `is_pass() == False` with **zero breaches** and, in `degrade` mode,
-only a WARNING.
-
-**Shape 1 — a union / list `type` declaration.**
+**Shape 1 — a union / list `type` declaration: RESOLVED.**
 
 ```json
 {"properties": {"a": {"type": ["string", "null"]}}}
 ```
 
-This is legal JSON Schema and the idiomatic way to express a nullable field. `_type_matches` does
-`_JSON_TYPE_MAP.get(json_type)` with an unhashable `list`, raising
-`TypeError: cannot use 'list' as a dict key`. That propagates out of the rule, out of the validator,
-out of the pool future, and is caught by `execute`'s generic handler (`:79-82`).
+This section previously recorded the single most-cited defect in the CONGINE documentation set: that
+this legal, idiomatic nullable-field declaration made `_type_matches` raise
+`TypeError: cannot use 'list' as a dict key`, degrading **every** validation against that contract
+permanently, with `status="fail"`, `degraded=True`, `degraded_reason="internal_error"` and zero
+breaches. It was carried as debt **D18** and propagated into the downstream documentation prompts.
 
-Observed: `status="fail"`, `degraded=True`, `degraded_reason="internal_error"`, `breaches=()`, ERROR
-log `"Validation error" error_type=TypeError`. **Every validation against that contract degrades,
-permanently, for as long as the schema is cached.** Under `fail_mode=silent` there is not even a
-log line at the use-case level.
+**That defect no longer exists.** Verified by execution against the P1 CLOSED tree:
 
-P0-2 mitigates the *discovery* problem: `find_unenforced_keywords` reports `a.type` for a non-string
-type value (`schema_vocabulary.py:99-101`, `_type_is_enforceable` at `:77-79`), and
-`test_unrecognised_and_union_types_flagged` pins it. So a contract loaded through the repository now
-warns at load. A schema injected via `schema_storage.put()` still does not.
+| Payload | Result |
+|---|---|
+| `{"a": "ok"}` | `status="pass"`, `degraded=False`, `is_enforced()=True` |
+| `{"a": None}` | `status="pass"`, `degraded=False`, `is_enforced()=True` |
+| `{"a": 123}` | `status="fail"`, `degraded=False`, one `TYPE_MATCH` breach on `a` |
 
-**Shape 2 — a non-dict schema.** A cached value that is not a mapping (e.g. a string) makes
-`_extract_params` call `schema.get(...)` ⇒ `AttributeError` ⇒ the same `internal_error` degrade.
-Verified. Neither `_prime_cache` nor `LFUCache.put` type-checks the schema, so any repository that
-yields `{"id": "x", "schema": "oops"}` produces this.
+Union types are evaluated correctly, the null member is honoured, and a genuine type violation
+produces a real breach rather than a degradation. The schema is also **admitted** by
+`admit_contract()`. Do not carry D18, or "union type ⇒ permanent silent degradation", as a current
+safety warning anywhere — including in generated documentation. It is history, and it is resolved.
+
+**Shape 2 — a non-dict schema: contained at admission, still live behind the bypass.**
+
+A cached value that is not a mapping (e.g. the string `"oops"`) still makes `_extract_params` call
+`schema.get(...)`, raising `AttributeError`, which `execute` converts into an `internal_error`
+degrade. Verified — the validator itself is unchanged.
+
+What changed is that it can no longer get there through a guarded path: `admit_contract("oops")`
+returns `admitted=False` with code `invalid_structure`, so a repository yielding
+`{"id": "x", "schema": "oops"}` is refused rather than cached. Verified.
+
+The residual exposure is therefore the **same** `schema_storage.put()` bypass described in §13.2 —
+one deferral, not two problems. Anything written straight to storage skips both the structural check
+and the capability check.
 
 ### 13.7 What a contract author needs to know, in one place
 
 1. Only **`required`, `properties`, `null_forbidden`** at the top level and
-   **`type`, `enum`, `min`/`minimum`, `max`/`maximum`, `pattern`** per property are enforced by
-   default. Everything else — including `minLength`, `format`, `const`, `additionalProperties`,
-   `items`, `allOf` — is ignored unless `CONGINE_SEMANTIC_VALIDATION=true`.
+   **`type`, `enum`, `min`/`minimum`, `max`/`maximum`, `pattern`** per property are enforced by the
+   native engine. Everything else — including `minLength`, `format`, `const`,
+   `additionalProperties`, `items`, `allOf` — needs `CONGINE_SEMANTIC_VALIDATION=true` (and
+   `format` needs `semantic_format_checking` as well). **A contract using a keyword your wired
+   evaluators do not cover is refused at admission**, not accepted and left unenforced — so the
+   failure you get is a loud rejection at load, not a quiet pass at runtime.
 2. **`pattern` is a full match**, not a search. Patterns written for JSON Schema will over-reject.
-3. **Dot-notation works only in `required`.** Nested constraints are silently unenforced.
-4. **A union `type` (`["string","null"]`) breaks the contract entirely** — every validation degrades.
-   Use a single type name and `null_forbidden`.
+3. **Dot-notation works only in `required`.** A dotted property path is refused at admission
+   (`ambiguous_property_path`) rather than silently unenforced.
+4. **A union `type` (`["string","null"]`) works.** This previously broke the contract entirely;
+   it no longer does (§13.6).
 5. **Booleans are never numbers and never integers**, and `1` is never a boolean.
 6. **`enum` treats a present `None` as a violation**; `type` does not. If a field is nullable and
    enumerated, `None` will breach.
@@ -2980,7 +3440,7 @@ lose events silently apart from the `dropped_total` counter.
 | G2 | No boot stall | breaker gate + inline snapshot fallback | `test_remediations.py:201,238,261`; `test_circuit_breaker.py` (11) | **HOLDS** |
 | G3 | No thundering herd | jitter + non-blocking `portalocker` boot lock | `test_single_flight_boot.py` (3) | **HOLDS** (per host; boot only) |
 | G4 | Snapshot integrity | scoped path, per-user dir, atomic write, cross-process lock, load-time refusal | `test_host_bypass.py` (5); `test_repository.py` (14) | **HOLDS** (POSIX) / **AT RISK** (Windows ownership check is a no-op) |
-| G5 | No ReDoS | `re2` core dep + length caps + pattern cache | `test_redos.py` (5) | **HOLDS** (except `pii_sanitize` stdlib `re`) |
+| G5 | No ReDoS | `re2` core dep + length caps + pattern cache | `test_redos.py` (5) | **HOLDS** — the former `pii_sanitize` stdlib-`re` exception is **closed**; the sanitizer is RE2-only |
 | G6 | Multi-tenant isolation | `get_default()` disabled, scoped snapshots, per-tenant containers, safe eviction | `test_tenant_isolation.py` (2); `test_container_tenant_lru.py` (7) | **HOLDS** — prior asterisk resolved |
 | G7 | PII-safe telemetry | breach sanitisation ×2 + logger blocklist + auto-allowlist | `test_pii_sanitization.py` (3); `test_logger.py` (5) | **HOLDS** |
 | G8 | Failed sync never clears the cache | early return + in-place `put` | `test_sync_usecase.py:57,46,84` | **HOLDS** *(newly documented)* |
@@ -2988,8 +3448,164 @@ lose events silently apart from the `dropped_total` counter.
 | G10 | Missing contract fails closed in every mode | raise before fail-mode logic | `test_usecase.py` | **HOLDS** *(newly documented)* |
 | G11 | Telemetry never blocks the hot path | `put_nowait` + `except Full`; no hot-path I/O | `test_event_bus.py` (11) | **HOLDS** *(newly documented)* |
 
-**Net: eleven invariants, all holding. One is weaker on Windows than on POSIX, and one carries a
-narrow, documented exception.** None is broken.
+**G1–G11 are mechanical / runtime invariants** — nothing stalls, deadlocks, leaks or blocks. Five
+further invariants sit above them, added by P0 and P1 and detailed in §14.10:
+
+| # | Category | Guarantee | Mechanism | Test | Status |
+|---|---|---|---|---|---|
+| G12 | **epistemic** — policy activation truth | An uninterpretable contract never becomes active policy | `domain/contract_admission.py` | `test_contract_admission.py` | **HOLDS** *(except the D-ADM bypass)* |
+| G13 | **epistemic** — configuration truth | Configuration is construction-path independent | `config.py` `__post_init__` → normalize → validate | `test_config_construction_parity.py` | **HOLDS** |
+| G14 | **epistemic** — evaluation/enforcement truth | No silent non-enforcement | `is_enforced()` + `DegradedReason` | `test_p0_result_semantics.py` | **HOLDS** |
+| G15 | **structural** — layer matrix | The layer matrix is mechanically enforced | `tools/check_architecture.py` | `tests/architecture/` (90) | **HOLDS** |
+| G16 | **structural / lifecycle** | Transactional composition + terminal close | `ServiceContainer` | `test_p1_lifecycle.py` | **HOLDS** |
+
+**Net: sixteen invariants, all holding — G1–G11 mechanical/runtime, G12–G14 epistemic/trust,
+G15–G16 structural. One is weaker on Windows than on POSIX.** None is broken. The G5 sanitizer
+exception recorded above was closed by the RE2 migration.
+
+The epistemic invariants differ in kind from the mechanical ones: G1–G11 constrain what the system
+**does**, while G12–G14 constrain what it may **claim**. G15–G16 constrain how it is **built and
+torn down**.
+
+### 14.10 Invariants added by P0 and P1
+
+Six invariants sit above the mechanical G1–G11. They divide into two kinds:
+
+- **G12–G14 — epistemic / trust invariants.** They constrain what CONGINE may **claim**: which
+  policy may activate, whether configuration means the same thing by either door, and whether an
+  evaluation actually happened.
+- **G15–G16 — structural invariants.** They constrain how the system is **built and torn down**.
+
+> **Numbering history.** P0 contributed G12–G14; the earlier §14 reconciliation failed to preserve
+> G13 and misnumbered the other post-G11 invariants. P1 contributed G15–G16. The numbering below is
+> canonical and the established meanings of G12 and G13 are preserved exactly.
+
+**G12 — Epistemic: policy activation truth. An uninterpretable contract never becomes active
+policy.** *(P0.)* A contract whose semantics the wired evaluator stack cannot enforce — an unknown
+type name, a dotted property key, an uncompilable pattern, a clause no active evaluator will execute
+— is **refused at admission** rather than activated, with the offending path and machine-facing code
+recorded. Admission takes a **capability set** composed from the evaluators actually wired, not an
+"is semantic validation on?" flag, because the real question is per-keyword. It **fails closed**: a
+defect inside the check refuses the contract rather than admitting it. **Mechanism:**
+`domain/contract_admission.py`. **Evidence:** `tests/unit/test_contract_admission.py`; the
+false-safety corpus in §14.11 (4/4 refused, 0 false PASS). **Status: HOLDS on every admission
+path** — with the `schema_storage.put()` bypass as the documented exception (D-ADM, §16).
+
+**G13 — Epistemic: configuration truth. Configuration is construction-path independent.** *(P0.)*
+`CongineConfig(...)` and `CongineConfig.from_env()` are two doors into the same object and must
+reach the same canonical state:
+
+```
+CongineConfig(...) → __post_init__ → normalize → validate
+```
+
+One boundary owns normalisation and validation, so direct construction cannot skip it. The defect
+this closed was subtle and real: an environment-read enum field could hold the raw string
+`"strict"` instead of `FailMode.STRICT`. Both compare equal under `==` — the enums are `str`-backed
+— so tests passed while production code branching on `is` identity took the wrong path, and a
+**strict deployment degraded instead of raising: enforcement silently lost.** Parity is therefore
+asserted on **type identity**, not only equality. **Mechanism:** `config.py` `__post_init__`.
+**Evidence:** `tests/unit/test_config_construction_parity.py`; §14.11 configuration parity 5/5.
+**Status: HOLDS.**
+
+**G14 — Epistemic: evaluation/enforcement truth. No silent non-enforcement.** *(P0,
+constitutional.)* The system never lets "NOT EVALUATED" look like "CONFORMING".
+`ValidationResult.is_enforced()` is the question a caller must ask first, and the result model keeps
+five outcomes distinct: an actual breach, a timeout, a load shed, an invalid/unmeasurable input, and
+an internal/resource failure. A degraded result carries `status="fail"` with **zero** breaches
+precisely so it cannot be mistaken for a clean pass. `DegradedReason` is a `StrEnum` so the wire
+value survives interpolation, and `LOAD_SHED` stays distinct from `TIMEOUT` — "we did not evaluate"
+is not "we evaluated too slowly". **Evidence:** `tests/unit/test_p0_result_semantics.py`; §14.11
+load shed 2000/2000 with the deadline path remaining a plain `TimeoutError`. **Status: HOLDS.**
+
+**G15 — Structural: the layer matrix is mechanically enforced.** *(P1.)* Dependencies obey the
+explicit matrix (§3), over runtime *and* `TYPE_CHECKING` imports, with zero allowlist entries and
+zero exemptions. The gate is itself tested: 90 self-tests covering all 36 layer pairs in both forms,
+and **falsified** by re-injecting removed edges rather than merely observed passing. **Mechanism:**
+`tools/check_architecture.py`. **Evidence:** `tests/architecture/test_layer_dependencies.py`.
+**Status: HOLDS.**
+
+**G16 — Structural/lifecycle: composition is transactional and close is terminal.** *(P1.)* If
+construction of a `ServiceContainer` fails partway, every already-acquired resource is released
+exactly once — no leaked worker thread, no leaked HTTP client, no stale `atexit` hook — the original
+failure stays visible, and a subsequent clean construction succeeds. `close()` is terminal,
+idempotent and thread-safe; it unregisters the hooks it owns; and registries replace a closed
+container rather than handing it out again. Every synchronous lifecycle wait on the close path
+carries an explicit finite bound (§7.4).
+
+Use-after-close raises `CongineLifecycleError`. **This is deliberately not a degraded
+`ValidationResult`**: degradation means enforcement was attempted and could not complete, whereas
+using a terminal object is a programming error. Conflating them would put a caller's bug into the
+enforcement statistics. **Evidence:** `tests/unit/test_p1_lifecycle.py`,
+`tests/unit/test_container_tenant_lru.py`. **Status: HOLDS.**
+
+### 14.11 The P0 trust baseline, reproducible
+
+P0's constitutional evidence was originally produced by programs that were **never committed**, so
+its figures could be re-derived but not reproduced, and the determinism hash survives in
+`P0_COMPLETION_REPORT.md` only truncated (`3ab5ce02…`).
+
+P1 reconstructed that methodology from the committed P0 tests, the P0 completion evidence and the
+recorded procedure, and **committed it** as `libs/congine-sdk/tools/p0_evidence/`:
+
+```
+uv run --package congine-sdk python -m tools.p0_evidence
+```
+
+Result at P1 closure — **5 / 5 properties hold**, reproduced identically from a clean worktree:
+
+| Property | Result |
+|---|---|
+| Determinism, N=5000 | **1 distinct canonical verdict** |
+| Admission preflight | **3/3 = 100 %** of shipped contracts admitted under their documented configuration |
+| False-safety corpus | **4/4 refused, 0 false PASS** |
+| Load shedding | **2000/2000 → `LoadShedError`**; a deadline overrun stays a plain `TimeoutError` |
+| Configuration parity | **5/5** enum fields canonical under both construction doors |
+
+**The determinism hash is a new baseline, not a match.** P0's canonical serialisation was not
+preserved, so no comparison with `3ab5ce02…` is possible and none should be claimed. The truthful
+statement is: *P0 established one deterministic verdict in its measured environment; P1 closure
+established a stable, committed methodology and this reproducible baseline for future
+identical-methodology comparison:*
+
+```
+715725383efa751299422a3dbe990c34c4c47d657e73ca90a03088ddf7f36dfa
+```
+
+Latency is recorded as evidence only and is never tuned toward a previous figure.
+
+### 14.12 The mechanical gates
+
+Five Nx targets gate the SDK. All are blocking; all run in CI across Python 3.11, 3.12 and 3.13.
+
+| Target | What it enforces | Result at P1 closure |
+|---|---|---|
+| `congine-sdk:lint` | Ruff format + check | clean, 99 files |
+| `congine-sdk:typecheck` | **strict mypy, blocking** | **0 issues, 40 files** |
+| `congine-sdk:architecture` | the layer matrix + the checker's own self-tests | 40 files scanned, 90 tests |
+| `congine-sdk:examples` | the offline LangChain example, executed | pass |
+| `congine-sdk:test` | full suite | 613 passed, 1 skipped |
+
+**Scope the typing claim precisely.** mypy is configured `strict = true` with
+`files = ["src/congine_core"]` and `python_version = "3.11"`, with no `ignore_errors` and no broad
+production exclusions. The correct claim is therefore: **production `congine_core` source is blocking
+under strict mypy.** It is *not* a claim that the tests and examples tree is strict-typed — those
+exercise intentionally dynamic integration seams and are covered by their runtime suites. CI no
+longer contains `mypy ... || true`.
+
+**Executable examples are verification evidence, not illustration.** `congine-sdk:examples` runs the
+real offline LangChain path — local contract resolution, the semantic evaluator enabled, remote
+telemetry and background services disabled, no provider credentials — through the **real public
+guard**, asserts a contract-valid `escalate` fallback, and closes its container. An example that
+stops working fails CI. Documentation code samples should come from source-controlled runnable
+examples that CI/Nx executes, rather than being written by hand into prose.
+
+**Two caveats worth carrying forward.** The preflight harness reads
+`CONGINE_SEMANTIC_VALIDATION` out of the shipped example rather than assuming it, and raises if the
+setting disappears — a first run reported 1/3 because provider-free was wrongly conflated with
+semantic-validation-off, and the fix was to the harness, never to admission. The false-safety corpus
+includes the subtle case where semantic validation is **on** but format checking is **off**, in
+which a `format` clause is still unenforced and must still be refused.
 
 ---
 
@@ -3001,9 +3617,37 @@ change. Where a seam is already adequate the entry says so; where the current co
 move, it says that too, plainly.
 
 The governing observation: of the eight planned capabilities, **six attach cleanly at L1/L4/L5 with
-no change to L2 or L3**. Two (history queries and correction hints) require additive changes to L2
-value objects or a new L3 use case. **Nothing requires modifying `RuleEngine` or
+no change to L2 or L3**. Two (history queries and correction hints) require additive changes to the
+L0 value contracts or a new L3 use case. **Nothing requires modifying `RuleEngine` or
 `ValidateContractUseCase`'s orchestration.**
+
+*(The "additive changes to L2 value objects" phrasing predates P1: the canonical value contracts now
+live in L0 (§3.1), so such a change is an L0 change. The conclusion is unaffected.)*
+
+**None of these is the next phase.** The current development order is:
+
+| Phase | Scope | Status |
+|---|---|---|
+| **P0** | Trust-critical hardening | **CLOSED** |
+| **P1** | Structural / mechanical hardening | **CLOSED** |
+| **P1.5** | **Semantic validation safety** — P1.5-01 honest semantic-validation cost communication · P1.5-02 separate native/semantic budget policy · P1.5-03 complexity/admission prototype · P1.5-04 compiled-validator caching investigation | **NEXT** |
+| **P2** | Verification / release gates — Python support matrix · Linux release CI · golden determinism corpus · branch coverage · pip-audit · SBOM · security gates · reproducible performance evidence | NOT STARTED |
+| **P3** | Formal documentation + ADR reconciliation — D1 · D2 · D3 · F01–F09 · ADR stabilization | NOT STARTED |
+| **Post-P3 / downstream web surfaces** | **W1** documentation site · **W2** prototype control-plane site — they *depend on* the reconciled documentation and do **not** define P3 completion | NOT STARTED |
+| **Phase A** | SDK productization + CLI | NOT STARTED |
+| **Phase B** | MCP | NOT STARTED |
+| **Phase C** | Durable evidence / history | NOT STARTED |
+| **Phase D** | Deterministic correction / convergence / context economics | NOT STARTED |
+| **Phase E** | Architecture intelligence + agent adapters | NOT STARTED |
+| **Phase F** | Optional adaptive routing, if evidence justifies it | NOT STARTED |
+| Beyond F | Policy IR · Business Policy DSL · Executable Organizational Policy | NOT STARTED |
+
+Earlier documents jumped straight from "Phase 0" to **Phase A**. That sequence is superseded:
+**P1.5, P2 and P3 all precede Phase A.** The seams below describe Phase B/C+ attachment points and
+remain accurate as *design* — they are simply further out than the numbering once implied.
+
+**"P1 CLOSED" is not "enterprise-release ready."** P1's responsibilities are complete; the deferrals
+in §16 and in `docs/_suite/hardening/P1_COMPLETION_REPORT.md` are not.
 
 ### 15.1 MCP server
 
@@ -3053,7 +3697,7 @@ declared on `IEventBus` (§5.9). A `SqliteEventBus` must implement all three or 
 (`noop_event_bus.py:30-40`) and is the template to copy.
 
 **The second obligation, which is a design constraint rather than a signature.** `publish` runs on
-the hot path and must not block (G11, §14.11). A synchronous SQLite write in `publish` would put
+the hot path and must not block (G11, §14.8). A synchronous SQLite write in `publish` would put
 disk I/O inside the validation path. The correct shape reuses `QueueEventBus`'s architecture —
 enqueue on the hot path, write from the daemon — which means `SqliteEventBus` is closer to "swap
 `_ship`'s HTTP POST for a SQLite `INSERT`" than to a from-scratch implementation. WAL mode is what
@@ -3061,7 +3705,7 @@ keeps history reads from blocking those writes.
 
 ### 15.3 Extended `TelemetryEvent`
 
-**Confirmed absent.** `domain/models.py:91-96` declares exactly six fields:
+**Confirmed absent.** `models.py:187-192` declares exactly six fields:
 `contract_id`, `contract_version`, `status`, `duration_ms`, `breach_details`, `created_at`. No
 `project_id`, `agent_id`, `file_paths`, `git_commit_sha`, `session_id`, `payload_hash`.
 
@@ -3108,7 +3752,7 @@ settled in the port signature before any implementation exists.
 
 ### 15.5 Correction hints on `BreachDetail`
 
-**Confirmed absent.** `domain/models.py:25-27` declares three fields: `rule`, `field`, `message`.
+**Confirmed absent.** `models.py:89-91` declares three fields: `rule`, `field`, `message`.
 
 **Where it attaches.** L2, as **one additive defaulted field** (`correction_hint: Optional[str] =
 None`), plus a new pure L2 module mapping `(rule, field, constraint)` → hint text.
@@ -3226,13 +3870,45 @@ both are cheaper to design for than to discover.
 
 ## 16. Debt register
 
-Two parts: the nine debts from `docs/context/01_SYSTEM_STATE.md` re-verified against current code,
-then sixteen items this pass found that no prior document records. Severity is this document's
-judgement — the one place in this document where judgement is the point.
+> **Reconciled at P1 CLOSED.** The `Status` values in §16.1 and the findings in §16.2–16.4 were
+> measured against the pre-P0 snapshot `a561992`. Many have since been closed by P0 or P1. The
+> table immediately below is the **current** status of every item; the detailed entries that follow
+> are retained because they record *why* each debt existed, which is often the only surviving
+> explanation of an architectural decision.
+>
+> **Do not cite a §16.2–16.4 entry as current debt without checking it against this table first.**
+>
+> | Item | Current status |
+> |---|---|
+> | Prior #1 — LangChain example emits `manual_review` ∉ contract enum | **RESOLVED — P1**. The example emits `escalate`, and `smoke.py` asserts it under the CI-backed `examples` target |
+> | Prior #2 — multi-tenant LRU eviction closes a live container | **RESOLVED — P0** (P0-1) |
+> | Prior #3 — `requires-python` contradicts the stated 3.10 floor | **RESOLVED — P1**. Floor is 3.11 and agrees across `requires-python`, classifiers, ruff `target-version = "py311"`, and the CI matrix |
+> | Prior #4 — size guards undercount multibyte UTF-8 | **NOT A DEFECT** — direction inverted; the guard over-counts and is conservative. Historical finding, correctly recorded |
+> | Prior #5 — stale `TelemetryEvent` "mutable" docstring | **RESOLVED — P1**. The type is frozen and the docstring now says so |
+> | Prior #6 — `pii_sanitize` uses stdlib `re` | **RESOLVED — P0/P1**. RE2 only; no stdlib `re` on the sanitizer path |
+> | Prior #7 — `CompositeValidator` runs the semantic validator on non-dict payloads | **STILL OPEN**. `validate()` calls the rule validator then the semantic validator with no non-dict short-circuit |
+> | Prior #8 — unenforced keywords pass silently | **SUPERSEDED — P0**. Replaced by refusal at admission; the residual is D-ADM below |
+> | Prior #9 — `ValidationTimer` dead code | **RESOLVED — P1**. Module, tests and references removed |
+> | **D1** — `region` accepted but never read | **RESOLVED — P0** (P0-08). `region` is validated metadata; only `CONGINE_BASE_URL` selects an endpoint, and a region without one is a configuration error (§12.4) |
+> | **D14** — ports under-declare their lifecycle surface | **RESOLVED**. `ports/lifecycle.py` (`IStoppable`, `IObservable`) is composed by the functional ports (§5.9) |
+> | **D17** — unenforced-keyword scan runs only on the cache-prime path | **SUPERSEDED** by admission; see D-ADM |
+> | **D18** — union `type` degrades every validation permanently | **RESOLVED**. Verified working at P1 CLOSED (§13.6). Do not carry this forward |
+> | **D2** — README documents a subset of config fields | **RE-MEASURE**. `CongineConfig` now has **48** fields; the "27/46" ratio is stale. `tests/unit/test_readme_config_table.py` now fails on an undocumented, misdocumented or nonexistent field, so the class of drift is guarded even where the old count is not |
+> | **D-ADM** *(new name for the surviving exposure)* — `ISchemaStorage.put()` bypasses contract admission | **DEFERRED — explicitly out of P1 scope.** Universal admission behind `ISchemaStorage`, an `AdmittedContract`/`CompiledContract` boundary, and version-aware storage identity are all deferred. This is the one path by which an unenforceable or malformed contract can still become active (§13.2, §13.6) |
+> | Architecture checker used `target_layer <= source_layer` | **RESOLVED — P1**. Replaced by the explicit matrix; 17 → 90 self-tests; zero allowlist entries (§4.4). **Not current debt** |
+>
+> Remaining items not listed above were measured pre-P0 and have not been individually
+> re-verified at P1 closure. Treat them as **UNVERIFIED at P1** rather than as confirmed current
+> debt, and re-measure before acting. Deferred work by phase is enumerated in
+> `docs/_suite/hardening/P1_COMPLETION_REPORT.md`.
 
-### 16.1 Prior debts, re-verified
+Two parts: the nine debts from `docs/context/01_SYSTEM_STATE.md` re-verified against the pre-P0
+tree, then sixteen items that pass found which no prior document records. Severity is this
+document's judgement — the one place in this document where judgement is the point.
 
-| Prior # | Debt | Status | Evidence |
+### 16.1 Prior debts, re-verified *(statuses below are as of `a561992`; see the table above for current status)*
+
+| Prior # | Debt | Status at `a561992` | Evidence |
 |---|---|---|---|
 | 1 | LangChain example: offline fallback `action="manual_review"` ∉ contract enum | **VERIFIED PRESENT** | `examples/LangChain/agent.py:90` sets `"action": "manual_review"`; `:75` documents the same wrong value in the Pydantic field description; `examples/LangChain/contracts/return_processing.json:7` enum is `["approve_return","reject_return","escalate"]` |
 | 2 | Multi-tenant LRU eviction `close()`s a possibly-live container, under the lock | **VERIFIED FIXED** | `dependency_injection.py:157-163` — registry entry removed, `weakref.finalize` armed, no teardown under `_tenant_lock`; 7 tests in `tests/unit/test_container_tenant_lru.py`. Replaced by a smaller debt, D3 below |
@@ -3300,7 +3976,7 @@ unreferenced regardless of how it was created.
 
 ---
 
-**D4 — `QueueEventBus._client` is unguarded across the stop race. Severity: MEDIUM.**
+**D4 — `QueueEventBus._client` is unguarded across the stop race. Severity: MEDIUM. — RESOLVED BY P1.**
 
 `stop()` closes the client and sets it to `None` (`:139-141`) after a 2 s join that can expire while
 the daemon is mid-`_ship`. Two outcomes: the daemon uses a closed client, `httpx` raises
@@ -3308,16 +3984,36 @@ the daemon is mid-`_ship`. Two outcomes: the daemon uses a closed client, `httpx
 escapes `_drain_loop` and the daemon dies with a stderr traceback outside the structured logger; or
 the daemon calls `_get_client()` after the null-out and builds a fresh client nothing will close.
 
-*Fix:* guard `_client` with a lock, or have `stop()` only close it after a successful join, or widen
-`_ship`'s except clause to `Exception`.
+*Fix, as applied in P1 — all three suggested remedies, plus a shutdown state machine.* Verified in
+`infrastructure/queue_event_bus.py`:
+
+- **`_ship_lock` (an `RLock`) serialises shipping against client closure.** `_close_client()`
+  acquires it before reading and nulling `_client`, and `_ship()` holds it across
+  `_ship_locked()` — which is where `_get_client()` is called. A daemon can no longer be mid-`_ship`
+  while `stop()` closes the client underneath it, and no post-stop `_get_client()` can build an
+  orphan client.
+- **`_ship`'s handler is widened to `Exception`**, with the daemon loop additionally guarded so
+  daemon errors never escape and never kill the thread with a stderr traceback.
+- **`_lifecycle_lock` + `_shutdown_complete`** give shutdown an explicit state machine: new producer
+  work is rejected once shutdown begins, the final drain and client closure are serialised against
+  in-flight shipping, `publish` stays non-raising, and post-stop publications are dropped and
+  counted rather than lost silently.
+
+`stop()` is a **no-raise boundary** by construction. The scenarios re-run at P1 closure: empty-queue
+close, active shipment, slow shipment, shipment failure during close, repeated close, concurrent
+close, post-stop publish, and partial-construction close. Do not describe this race as current
+behaviour.
 
 ---
 
-**D5 — Stale `TelemetryEvent` docstring, and a shallow-immutability caveat. Severity: LOW.**
+**D5 — Stale `TelemetryEvent` docstring, and a shallow-immutability caveat. Severity: LOW —
+docstring RESOLVED in P1; the shallow-immutability caveat STILL STANDS.**
 
-Prior debt #5, still present (`domain/models.py:5` vs `:74`). Worth extending: the class is frozen
-but `breach_details` is a `list`, so the audit-L7 guarantee ("a caller cannot mutate it and race the
-worker") is **shallow** — the attribute cannot be rebound but the list can be mutated in place. And
+The stale "mutable" docstring is fixed: `congine_core/models.py` now states that the type is frozen
+and that post-init defaulting uses `object.__setattr__`. The extension recorded here remains true and
+is the part worth carrying forward: the class is frozen but `breach_details` is a `list`, so the
+audit-L7 guarantee ("a caller cannot mutate it and race the worker") is **shallow** — the attribute
+cannot be rebound but the list can be mutated in place. And
 because a `list` field is unhashable, this frozen dataclass is not hashable, unlike the other three.
 
 *Fix:* make it a tuple (matching `ValidationResult.breaches`) and correct the docstring.
@@ -3484,7 +4180,15 @@ loader is required to call.
 
 ---
 
-**D18 — A union `type` declaration degrades every validation, permanently. Severity: HIGH.**
+**D18 — A union `type` declaration degrades every validation, permanently. Severity: HIGH. —
+RESOLVED. Do not carry this forward.**
+
+> Union types now evaluate correctly: a conforming value and an explicit `null` both pass, and a
+> genuine type violation produces a real `TYPE_MATCH` breach — `degraded=False`,
+> `is_enforced()=True`. Verified against P1 CLOSED (§13.6). The non-dict-schema shape is now refused
+> at admission (`invalid_structure`). **This was the single most-propagated stale claim in the
+> CONGINE documentation set**, reproduced across the downstream authoring prompts; it must not
+> reappear in generated documentation. The original entry follows as history.
 
 `{"type": ["string","null"]}` is legal JSON Schema and the idiomatic nullable-field spelling.
 `_type_matches` does `_JSON_TYPE_MAP.get(json_type)` with an unhashable `list`, raising `TypeError`
@@ -3567,6 +4271,11 @@ an enum — this string field has no validation at all.
 
 ### 16.4 Severity roll-up
 
+> **HISTORICAL — roll-up as measured at `a561992`, pre-P0.** All three HIGH items have since been
+> closed: D1 by P0-08, D18 by the union-type fix, and D2's specific ratio superseded by a
+> README-drift test plus a new field count. See the reconciliation table at the top of §16 for
+> current status. Retained to show what the pre-hardening risk profile looked like.
+
 | Severity | Count | Items |
 |---|---|---|
 | HIGH | 3 | D1 (dead `region`), D2 (README covers 27/46), D18 (union type degrades everything) |
@@ -3578,19 +4287,40 @@ an enum — this string field has no validation at all.
 | Prior debts found to be wrong | 1 | #4 (direction inverted) |
 | Dead / deprecated items | 13 | §16.3 |
 
-**The pattern worth naming.** Nine of the twenty-two new findings (D1, D2, D5, D9, D15, D16, D20,
-D21, D22) are **documentation or configuration drifting away from behaviour**, not defects in the
-mechanisms. The mechanisms — the executor, the cache, the breaker, the repository, the rule engine —
-are in good shape and their guarantees hold (§14). The risk in this codebase is concentrated in the
-gap between what a user is told and what the code does, and D18 is the sharpest instance: a contract
-written in perfectly ordinary JSON Schema silently stops enforcing anything at all.
+**The pattern worth naming, and it survived the hardening.** Nine of the twenty-two findings (D1,
+D2, D5, D9, D15, D16, D20, D21, D22) were **documentation or configuration drifting away from
+behaviour**, not defects in the mechanisms. The mechanisms — the executor, the cache, the breaker,
+the repository, the rule engine — were in good shape and their guarantees held.
+
+P0 and P1 closed the sharpest instances, and the lesson generalised into a structural one: the
+architecture gate itself turned out to be a document-behaviour gap of the same species — it *claimed*
+to enforce inward dependencies while actually encoding a weaker rule, and passed for that reason
+(§4.4). The response in both cases was the same: **make the claim mechanically checkable.** Contract
+admission replaced a warning; the layer matrix replaced a numeric comparison; strict mypy became
+blocking; the P0 evidence became committed harnesses (§14.11). Where a claim in this document is not
+backed by something executable, treat it as the next candidate for that treatment.
 
 ---
 
 ## 17. Open questions for the founder
 
-Each of these is a decision the code cannot answer and that materially affects the next phase.
-Numbered for citation.
+Each of these was a decision the code could not answer. **Six of the nine have since been answered
+by P0 or P1**; the answers are recorded below because the reasoning is part of the architecture.
+
+| Q | Question | Status |
+|---|---|---|
+| **Q1** | Is `region` meant to do something? | **ANSWERED — P0.** It is validated deployment metadata. It does *not* select an endpoint, and setting it without `CONGINE_BASE_URL` is a configuration error. The region→hostname mapping was reverted (P0-08): a governance SDK must never infer a credential destination (§12.4) |
+| **Q2** | Should a union `type` be supported, or rejected loudly? | **ANSWERED — supported.** `{"type": ["string","null"]}` now evaluates correctly (§13.6). The "accept, then crash at validation time" third state is gone |
+| **Q3** | Is `null_forbidden` a permanent part of the contract language? | **STILL OPEN.** Q2's resolution removes the urgency — users writing idiomatic nullable unions now get correct behaviour — but the portability question stands |
+| **Q4** | Should the unenforced-keyword scan move behind `ISchemaStorage.put`? | **PARTIALLY ANSWERED — deliberately deferred.** P0 replaced the warning with *refusal* at admission, which is a stronger answer for every path that goes through admission. Moving admission behind the storage port is the remaining half and is the D-ADM deferral (§16) |
+| **Q5** | Should an evicted-but-referenced tenant container keep running forever? | **STILL OPEN.** P1 made `close()` terminal and registries replace closed containers, which narrows it, but the eviction-vs-liveness policy question is unchanged |
+| **Q6** | Is the Python floor 3.10 or 3.11? | **ANSWERED — 3.11.** Declared consistently in `requires-python`, the classifiers, ruff `target-version = "py311"`, and the CI matrix |
+| **Q7** | Should the README config table be generated? | **ANSWERED — guarded instead.** `tests/unit/test_readme_config_table.py` fails when a field is undocumented, misdocumented, or documented but nonexistent. Generation was not needed once drift became impossible |
+| **Q8** | Should the ports declare their lifecycle surface? | **ANSWERED — yes.** `ports/lifecycle.py` provides `IStoppable` and `IObservable`, composed by the functional ports (§5.9) |
+| **Q9** | Is telemetry meant to be durable? | **STILL OPEN.** Telemetry remains explicitly non-durable, and Phase C's "event log as data spine" still needs reconciling with that |
+
+The three still-open questions (**Q3, Q5, Q9**) are the ones that materially affect the next phase.
+The original statements follow, unedited, for their reasoning.
 
 **Q1 — Is `region` meant to do something?** It validates, it is documented with GDPR connotations
 (`config.py:40-42`), and nothing reads it (§12.4, D1). Should it derive a default `base_url`, travel
@@ -3632,7 +4362,7 @@ table covers `dataclasses.fields(CongineConfig)` would make this class of drift 
 declare (§5.9, D14). This becomes concrete the moment `SqliteEventBus` is written: a faithful
 implementation of `IEventBus` as declared will `AttributeError` in `health()` and `close()`.
 
-**Q9 — Is telemetry meant to be durable?** Today it is explicitly not (G11, §14.11): queue-full,
+**Q9 — Is telemetry meant to be durable?** Today it is explicitly not (G11, §14.8): queue-full,
 retry-exhaustion, breaker-OPEN and process death all drop events silently apart from a counter.
 Phase C in the roadmap treats the event log as "the data spine" that capability profiles and history
 queries are computed from. Those two positions are incompatible, and the reconciliation (a durable
@@ -3678,7 +4408,7 @@ consumer).
 | 12 | `ports/validation_runner.py` | 1 | — | — | `validate_contract_usecase`, `ports/__init__` |
 | 13 | `ports/circuit_breaker.py` | 1 | — | — | `sync_contracts_usecase` (TC), `queue_event_bus` (TC), `ports/__init__` |
 | 14 | `domain/__init__.py` | 2 | `domain.models`, `domain.validator` | — | `congine_core/__init__` |
-| 15 | `domain/models.py` | 2 | — | — | `domain/validator`, `validate_contract_usecase`, `jsonschema_validator`, `ks_drift`, `dependency_injection`; TC from `ports/event_bus`, `ports/semantic_validator`, `noop_event_bus`, `queue_event_bus`, `langchain_handler` |
+| 15 | `models.py` *(**L0** since P1; was `domain/models.py`)* | 0 | — | — | `domain/validator`, `validate_contract_usecase`, `jsonschema_validator`, `ks_drift`, `dependency_injection`; TC from `ports/event_bus`, `ports/semantic_validator`, `noop_event_bus`, `queue_event_bus`, `langchain_handler`. `domain/models.py` remains as an L2 compatibility re-export |
 | 16 | `domain/validator.py` | 2 | `domain.models`, `security_limits` | `ports.semantic_validator` | `validate_contract_usecase`, `dependency_injection`, `domain/__init__` |
 | 17 | `domain/schema_vocabulary.py` | 2 | — | — | `sync_contracts_usecase` **(new since baseline)** |
 | 18 | `usecases/__init__.py` | 3 | both use cases | — | `congine_core/__init__` |
@@ -3788,7 +4518,7 @@ P0-1 lock-holding issue), not the executor H1 — worth noting when grepping.
 |---|---|---|
 | **L4** | `exceptions.py:57` | **Tier-2 aliases are compatibility shims, not distinct types.** A validation timeout degrades rather than raising `ValidationTimeoutException`; `TenantIsolationViolationException` is a forward-compat placeholder |
 | **L5** | `logger.py:5` | **Level threshold** so per-drain `DEBUG` telemetry is silent in production |
-| **L7** | `domain/models.py:78` | **`TelemetryEvent` is frozen** so a caller cannot mutate an enqueued event and race the drain worker. (Shallow — `breach_details` is still a mutable list; see debt D5) |
+| **L7** | `models.py:171` (L0; formerly `domain/models.py:78`) | **`TelemetryEvent` is frozen** so a caller cannot mutate an enqueued event and race the drain worker. (Shallow — `breach_details` is still a mutable list; see debt D5) |
 
 **Not present in `src/`: L6.**
 `config.py:95`'s mention of "L4" is a **layer** reference, not an audit ID.
