@@ -27,9 +27,31 @@ _MUST_ENFORCE = ("pattern", "patternProperties", "ref-local-valid")
 _KNOWN_UNTRUTHFUL = ("contentEncoding", "contentMediaType")
 
 
-def _capability(as_json: bool) -> int:
-    witnesses = capability.run_local_witnesses() + capability.run_retrieval_witnesses()
+def _capability(as_json: bool, live_server: bool = False) -> int:
+    """Report semantic capability truth.
+
+    Args:
+        as_json: Emit the machine-readable record instead of the summary.
+        live_server: Also run the loopback-server retrieval witness. It is the
+            most decisive evidence but binds a socket, so it stays opt-in and
+            the hermetic retriever-spy witness carries the routine check.
+    """
+    witnesses = capability.run_local_witnesses() + capability.run_dialect_witnesses()
+    if live_server:
+        witnesses += capability.run_retrieval_witnesses()
     rows = capability.summarize(witnesses)
+
+    drift = capability.capability_drift()
+    hermetic_external = capability.hermetic_retrieval_witness(
+        "http://example.invalid/s.json"
+    )
+    hermetic_local = capability.hermetic_local_ref_witness()
+    surface = {
+        draft: sorted(
+            k for k, v in capability.observed_capability(draft).items() if not v
+        )
+        for draft in capability.DRAFTS
+    }
 
     failures: List[str] = []
     for name in _MUST_ENFORCE:
@@ -41,13 +63,27 @@ def _capability(as_json: bool) -> int:
 
     retrieval = [n for n, r in rows.items() if r["retrieval_observed"]]
 
+    # The derived capability model is only trustworthy while it agrees with
+    # black-box observation, so disagreement is a hard failure.
+    if drift:
+        failures.append(f"derived capability drifted from observation: {drift}")
+    if any(r["fetched"] for r in hermetic_external.values()):
+        failures.append("no-retrieval registry did not prevent a fetch")
+    if not all(r["enforced"] for r in hermetic_local.values()):
+        failures.append("no-retrieval registry broke valid local references")
+
     if as_json:
         print(
             json.dumps(
                 {
                     "kind": "p1_5_capability",
+                    "methodology_version": benchmark.METHODOLOGY_VERSION,
                     "platform": benchmark.platform_meta(),
                     "rows": rows,
+                    "silent_advertised_keywords_by_draft": surface,
+                    "capability_drift": drift,
+                    "hermetic_external_ref": hermetic_external,
+                    "hermetic_local_ref": hermetic_local,
                     "failures": failures,
                     "retrieval_observed": retrieval,
                 },
@@ -70,8 +106,26 @@ def _capability(as_json: bool) -> int:
                 f"{','.join(row['outcomes'])}{mark}"
             )
         print()
+        print()
+        print("per-draft keywords that are SILENT despite being advertised:")
+        for draft, silent in surface.items():
+            print(
+                f"  {draft:12} {len(silent):2}  {', '.join(silent) if silent else '-'}"
+            )
+        print()
+        print(
+            f"derived-vs-observed capability drift: "
+            f"{drift if drift else 'NONE (model matches all 5 drafts)'}"
+        )
+        fetched = sum(r["retrieval_requested"] for r in hermetic_external.values())
+        print(
+            f"hermetic no-retrieval registry: {fetched} retrieval request(s) refused, "
+            f"0 fetched; local refs still enforced on "
+            f"{sum(1 for r in hermetic_local.values() if r['enforced'])}/"
+            f"{len(hermetic_local)} drafts"
+        )
         if retrieval:
-            print(f"external reference retrieval observed on: {', '.join(retrieval)}")
+            print(f"live-server retrieval observed on: {', '.join(retrieval)}")
         if failures:
             print("FAILURES:")
             for line in failures:
@@ -87,12 +141,12 @@ def main(argv: List[str] | None = None) -> int:
     mode = next((a for a in args if not a.startswith("-")), "all")
 
     if mode == "capability":
-        return _capability(as_json)
+        return _capability(as_json, live_server="--live-server" in args)
     forwarded = [a for a in args if a in ("--json", "--quick")]
     if mode == "benchmark":
         return benchmark.main(forwarded)
     if mode == "all":
-        rc = _capability(as_json)
+        rc = _capability(as_json, live_server="--live-server" in args)
         print()
         benchmark.main(forwarded)
         return rc

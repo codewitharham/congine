@@ -1,6 +1,72 @@
 {
+ "capability_drift": {},
  "failures": [],
+ "hermetic_external_ref": {
+  "draft201909": {
+   "detail": "_WrappedReferencingError",
+   "enforced": false,
+   "fetched": false,
+   "outcome": "error",
+   "retrieval_requested": 1
+  },
+  "draft202012": {
+   "detail": "_WrappedReferencingError",
+   "enforced": false,
+   "fetched": false,
+   "outcome": "error",
+   "retrieval_requested": 1
+  },
+  "draft4": {
+   "detail": "_WrappedReferencingError",
+   "enforced": false,
+   "fetched": false,
+   "outcome": "error",
+   "retrieval_requested": 1
+  },
+  "draft6": {
+   "detail": "_WrappedReferencingError",
+   "enforced": false,
+   "fetched": false,
+   "outcome": "error",
+   "retrieval_requested": 1
+  },
+  "draft7": {
+   "detail": "_WrappedReferencingError",
+   "enforced": false,
+   "fetched": false,
+   "outcome": "error",
+   "retrieval_requested": 1
+  }
+ },
+ "hermetic_local_ref": {
+  "draft201909": {
+   "enforced": true,
+   "outcome": "enforced",
+   "retrieval_requested": 0
+  },
+  "draft202012": {
+   "enforced": true,
+   "outcome": "enforced",
+   "retrieval_requested": 0
+  },
+  "draft4": {
+   "enforced": true,
+   "outcome": "enforced",
+   "retrieval_requested": 0
+  },
+  "draft6": {
+   "enforced": true,
+   "outcome": "enforced",
+   "retrieval_requested": 0
+  },
+  "draft7": {
+   "enforced": true,
+   "outcome": "enforced",
+   "retrieval_requested": 0
+  }
+ },
  "kind": "p1_5_capability",
+ "methodology_version": 2,
  "platform": {
   "google_re2": "1.1.20251105",
   "implementation": "CPython",
@@ -10,9 +76,7 @@
   "python": "3.14.6",
   "referencing": "0.37.0"
  },
- "retrieval_observed": [
-  "ref-external-http"
- ],
+ "retrieval_observed": [],
  "rows": {
   "contentEncoding": {
    "all_agree": true,
@@ -74,6 +138,279 @@
    ],
    "retrieval_observed": false
   },
+  "kw:additionalProperties": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:const": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:contains": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:dependentRequired": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:dependentSchemas": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:exclusiveMaximum": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:exclusiveMinimum": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:if": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:maxContains": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:maxItems": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:minContains": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:minLength": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:minProperties": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:multipleOf": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:not": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:oneOf": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:prefixItems": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft202012"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:propertyNames": {
+   "all_agree": false,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced",
+    "silent-pass"
+   ],
+   "retrieval_observed": false
+  },
+  "kw:uniqueItems": {
+   "all_agree": true,
+   "drafts": 5,
+   "enforced_on": [
+    "draft201909",
+    "draft202012",
+    "draft4",
+    "draft6",
+    "draft7"
+   ],
+   "outcomes": [
+    "enforced"
+   ],
+   "retrieval_observed": false
+  },
   "pattern": {
    "all_agree": true,
    "drafts": 5,
@@ -103,21 +440,6 @@
     "enforced"
    ],
    "retrieval_observed": false
-  },
-  "ref-external-http": {
-   "all_agree": true,
-   "drafts": 5,
-   "enforced_on": [
-    "draft201909",
-    "draft202012",
-    "draft4",
-    "draft6",
-    "draft7"
-   ],
-   "outcomes": [
-    "enforced"
-   ],
-   "retrieval_observed": true
   },
   "ref-local-cyclic": {
    "all_agree": true,
@@ -161,5 +483,39 @@
    ],
    "retrieval_observed": false
   }
+ },
+ "silent_advertised_keywords_by_draft": {
+  "draft201909": [
+   "prefixItems"
+  ],
+  "draft202012": [],
+  "draft4": [
+   "const",
+   "contains",
+   "dependentRequired",
+   "dependentSchemas",
+   "exclusiveMaximum",
+   "exclusiveMinimum",
+   "if",
+   "maxContains",
+   "minContains",
+   "prefixItems",
+   "propertyNames"
+  ],
+  "draft6": [
+   "dependentRequired",
+   "dependentSchemas",
+   "if",
+   "maxContains",
+   "minContains",
+   "prefixItems"
+  ],
+  "draft7": [
+   "dependentRequired",
+   "dependentSchemas",
+   "maxContains",
+   "minContains",
+   "prefixItems"
+  ]
  }
 }

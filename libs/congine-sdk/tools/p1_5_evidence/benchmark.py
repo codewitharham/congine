@@ -37,6 +37,11 @@ from tools.p1_5_evidence import fixtures
 
 #: Iteration counts are per-case: large fixtures are slow enough that a high
 #: count buys precision nobody needs while making the corpus unusable.
+#: Bumped whenever the measurement schema or method changes, so a stale
+#: baseline cannot be silently compared against a newer run. Independent of the
+#: P0 determinism methodology, which P1.5 does not touch.
+METHODOLOGY_VERSION = 2
+
 DEFAULT_ITERATIONS = 120
 LARGE_ITERATIONS = 30
 WARMUP = 5
@@ -155,7 +160,12 @@ def run(
             ),
         }
         total = row["semantic_total"]["p50"]
-        row["prep_share_pct"] = (
+        # NOT a fractional decomposition. `prep` and `semantic_total` are
+        # sampled independently, so this ratio can exceed 100% under normal
+        # measurement variance. It is reported unclamped and unmanipulated;
+        # the supported conclusion is "preparation dominates", never a literal
+        # share of a whole.
+        row["prep_to_total_ratio_pct"] = (
             round(100.0 * row["prep"]["p50"] / total, 1) if total else 0.0
         )
         row["semantic_vs_native"] = (
@@ -165,6 +175,7 @@ def run(
 
     return {
         "kind": "p1_5_benchmark",
+        "methodology_version": METHODOLOGY_VERSION,
         "quick": quick,
         "draft": draft,
         "format_checking": format_checking,
@@ -184,21 +195,31 @@ def render(record: Dict[str, Any]) -> str:
         f"jsonschema {record['platform']['jsonschema']}",
         "",
         f"{'case':<24}{'native':>9}{'semantic':>10}{'prep':>9}{'eval':>9}"
-        f"{'prep%':>8}{'vs native':>11}",
+        f"{'prep/tot':>9}{'vs native':>11}",
         "-" * 80,
     ]
     for name, row in record["cases"].items():
         lines.append(
             f"{name:<24}{row['native']['p50']:>9.3f}{row['semantic_total']['p50']:>10.3f}"
             f"{row['prep']['p50']:>9.3f}{row['eval']['p50']:>9.3f}"
-            f"{row['prep_share_pct']:>7.1f}%"
+            f"{row['prep_to_total_ratio_pct']:>8.1f}%"
             f"{(str(row['semantic_vs_native']) + 'x') if row['semantic_vs_native'] else '-':>11}"
         )
     lines.append("")
-    shares = [r["prep_share_pct"] for r in record["cases"].values()]
+    ratios = [r["prep_to_total_ratio_pct"] for r in record["cases"].values()]
+    speedups = [
+        r["semantic_total"]["p50"] / r["eval"]["p50"]
+        for r in record["cases"].values()
+        if r["eval"]["p50"]
+    ]
     lines.append(
-        f"preparation is {min(shares):.0f}%-{max(shares):.0f}% of semantic cost "
-        f"(median {statistics.median(shares):.0f}%) — repeated on every call"
+        f"prep/total median ratio {statistics.median(ratios):.0f}% "
+        f"(range {min(ratios):.0f}-{max(ratios):.0f}%) — independently sampled "
+        f"medians, not a fractional decomposition"
+    )
+    lines.append(
+        f"preparation dominates: reusing a prepared validator is "
+        f"{min(speedups):.0f}x-{max(speedups):.0f}x faster than the current path"
     )
     lines.append("Observational only. Not a release SLA; P2 owns performance gates.")
     return "\n".join(lines)
