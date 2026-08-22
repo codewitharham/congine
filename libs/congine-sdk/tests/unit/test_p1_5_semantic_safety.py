@@ -312,3 +312,80 @@ class TestCapabilityTruth:
             enforced_keywords=frozenset({"type", "properties"}),
         )
         assert result.admitted
+
+
+# --------------------------------------------------------------------------- #
+class TestDialectComposedSemantics:
+    """Composed dialect forms must not be mistaken for unsupported semantics.
+
+    Two keywords are asserted *inside another keyword's handler* rather than
+    through one of their own, so handler presence alone misjudges them. The
+    ``if``/``contains`` family was caught in A0.1; the draft-4 exclusive bounds
+    are the same trap in a value-dependent form, and deriving capability at
+    keyword level alone would have refused genuinely enforceable draft-4
+    contracts.
+    """
+
+    _D4_MIN = {
+        "type": "object",
+        "properties": {"f": {"type": "number", "minimum": 5, "exclusiveMinimum": True}},
+    }
+    _D4_MAX = {
+        "type": "object",
+        "properties": {"f": {"type": "number", "maximum": 5, "exclusiveMaximum": True}},
+    }
+
+    def test_draft4_boolean_exclusive_bounds_are_admitted(self) -> None:
+        """Draft 4 spells the exclusive bounds as booleans, and enforces them."""
+        for schema in (self._D4_MIN, self._D4_MAX):
+            assert _admit(schema, _capability("draft4")).admitted  # type: ignore[attr-defined]
+
+    def test_draft4_boolean_exclusive_bounds_are_really_enforced(self) -> None:
+        """The admission above is only correct because the evaluator asserts it."""
+        validator = JsonSchemaSemanticValidator(jsonschema_draft="draft4")
+        assert validator.validate({"f": 5}, self._D4_MIN)  # 5 is not > 5
+        assert not validator.validate({"f": 6}, self._D4_MIN)
+        assert validator.validate({"f": 5}, self._D4_MAX)  # 5 is not < 5
+        assert not validator.validate({"f": 4}, self._D4_MAX)
+
+    def test_draft4_boolean_form_without_sibling_bound_is_refused(self) -> None:
+        """``exclusiveMinimum: true`` alone asserts nothing — there is no bound."""
+        schema = {
+            "type": "object",
+            "properties": {"f": {"type": "number", "exclusiveMinimum": True}},
+        }
+        assert not _admit(schema, _capability("draft4")).admitted  # type: ignore[attr-defined]
+
+    def test_wrong_dialect_spelling_is_refused_in_both_directions(self) -> None:
+        """Each dialect silently ignores the other's form, so each must refuse it."""
+        numeric = {"type": "object", "properties": {"f": {"exclusiveMinimum": 5}}}
+        # Numeric form is draft6+; draft4 ignores it.
+        assert not _admit(numeric, _capability("draft4")).admitted  # type: ignore[attr-defined]
+        # Boolean form is draft4; draft6+ ignores it.
+        assert not _admit(self._D4_MIN, _capability("draft202012")).admitted  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize(
+        "draft", ["draft6", "draft7", "draft201909", "draft202012"]
+    )
+    def test_numeric_exclusive_bounds_admitted_from_draft6(self, draft: str) -> None:
+        schema = {"type": "object", "properties": {"f": {"exclusiveMinimum": 5}}}
+        assert _admit(schema, _capability(draft)).admitted  # type: ignore[attr-defined]
+
+    def test_dependencies_keyword_follows_its_dialect(self) -> None:
+        """``dependencies`` is draft4-7; 2019-09 split it into two keywords.
+
+        Handler-derived capability already gets this right, which is the point of
+        deriving rather than maintaining a list: the split needed no special case.
+        """
+        legacy = {"type": "object", "dependencies": {"a": ["b"]}}
+        modern = {"type": "object", "dependentRequired": {"a": ["b"]}}
+        assert _admit(legacy, _capability("draft4")).admitted  # type: ignore[attr-defined]
+        assert _admit(legacy, _capability("draft7")).admitted  # type: ignore[attr-defined]
+        assert not _admit(legacy, _capability("draft202012")).admitted  # type: ignore[attr-defined]
+        assert not _admit(modern, _capability("draft7")).admitted  # type: ignore[attr-defined]
+        assert _admit(modern, _capability("draft202012")).admitted  # type: ignore[attr-defined]
+
+    def test_capability_flags_the_boolean_form_only_on_draft4(self) -> None:
+        assert _capability("draft4").boolean_exclusive_bounds is True
+        for draft in ("draft6", "draft7", "draft201909", "draft202012"):
+            assert _capability(draft).boolean_exclusive_bounds is False

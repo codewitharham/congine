@@ -214,6 +214,7 @@ def admit_contract(
     effective = capability or SemanticCapability(
         draft="unspecified", enforced_keywords=enforced_keywords
     )
+    _check_exclusive_bounds(schema, effective, issues)
     _check_references(schema, effective, issues)
     _check_nested_patterns(schema, issues)
     if capability is not None:
@@ -481,6 +482,57 @@ def _check_regex_value(
                 ),
             )
         )
+
+
+#: Bounds whose enforceability depends on the *value form*, not the keyword.
+_EXCLUSIVE_BOUNDS: Final = ("exclusiveMinimum", "exclusiveMaximum")
+
+
+def _check_exclusive_bounds(
+    schema: Mapping[str, Any],
+    capability: SemanticCapability,
+    issues: list[ContractAdmissionIssue],
+) -> None:
+    """Refuse an exclusive bound written in a form this dialect does not assert.
+
+    This keyword cannot be judged at keyword level, which is why it is handled
+    apart from the generic scan. Draft 4 spells it as a **boolean modifier** on
+    ``minimum``/``maximum`` and asserts it inside those handlers; draft 6 and
+    later spell it as a **standalone number** with its own handler. Each dialect
+    silently ignores the other's spelling, so admitting on keyword presence
+    alone would let a contract look enforced while asserting nothing — and
+    refusing on handler absence alone would reject perfectly valid draft-4
+    contracts.
+    """
+    for path, node in _walk_subschemas(schema, _ROOT):
+        for keyword in _EXCLUSIVE_BOUNDS:
+            if keyword not in node:
+                continue
+            value = node[keyword]
+            if capability.enforces_exclusive_bound(keyword, value, node):
+                continue
+            sibling = "minimum" if keyword == "exclusiveMinimum" else "maximum"
+            if isinstance(value, bool):
+                detail = (
+                    f"the boolean form requires a sibling '{sibling}' and a dialect "
+                    "that asserts it (draft 4)"
+                )
+            else:
+                detail = (
+                    "this dialect expects the draft-4 boolean form "
+                    f"alongside '{sibling}'"
+                )
+            issues.append(
+                ContractAdmissionIssue(
+                    code=ContractAdmissionCode.UNSUPPORTED_KEYWORD,
+                    path=f"{path}.{keyword}",
+                    message=(
+                        f"'{keyword}' is not asserted as written under "
+                        f"{capability.draft}: {detail}. As written the clause "
+                        "would enforce nothing."
+                    ),
+                )
+            )
 
 
 def _check_formats(
@@ -772,6 +824,8 @@ def _check_unsupported_keywords(
         keyword = path.rsplit(".", 1)[-1]
         if keyword == "type":
             continue  # already covered, with a better message
+        if keyword in _EXCLUSIVE_BOUNDS:
+            continue  # value-aware; see _check_exclusive_bounds
         if keyword in IGNORABLE_METADATA_KEYWORDS:
             continue
         if keyword in enforced_keywords:

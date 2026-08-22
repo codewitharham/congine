@@ -59,6 +59,14 @@ class SemanticCapability:
             which is why this is a name set rather than a boolean.
         allow_external_references: Whether ``$ref`` may resolve outside the
             document. **False throughout P1.5** — see the module docstring.
+        boolean_exclusive_bounds: Whether the dialect enforces the draft-4 form
+            ``{"minimum": N, "exclusiveMinimum": true}``. In draft 4 the
+            exclusive bounds are **booleans that modify** ``minimum``/``maximum``
+            and are asserted inside those handlers, so they have no handler of
+            their own; from draft 6 they are standalone numbers. Keyword-level
+            capability cannot express that difference, because whether the
+            clause is enforced depends on the *value*, so admission consults
+            this flag together with the value it actually finds.
     """
 
     draft: str
@@ -66,10 +74,34 @@ class SemanticCapability:
     format_assertion: bool = False
     supported_formats: FrozenSet[str] = field(default_factory=frozenset)
     allow_external_references: bool = False
+    boolean_exclusive_bounds: bool = False
 
     def enforces(self, keyword: str) -> bool:
         """Return whether *keyword* is genuinely asserted by this evaluator."""
         return keyword in self.enforced_keywords
+
+    def enforces_exclusive_bound(
+        self, keyword: str, value: object, node: object
+    ) -> bool:
+        """Return whether an exclusive-bound clause is genuinely asserted.
+
+        Two dialect forms are legitimate and they are not interchangeable:
+
+        * **draft 6+** — ``{"exclusiveMinimum": 5}``, a standalone numeric
+          keyword with its own handler.
+        * **draft 4** — ``{"minimum": 5, "exclusiveMinimum": true}``, a boolean
+          modifier asserted inside the ``minimum`` handler. It asserts nothing
+          without its sibling bound, so the sibling is required here too.
+
+        Using the wrong form for the dialect enforces nothing at all, which is
+        exactly the silent non-enforcement admission exists to refuse.
+        """
+        if self.enforces(keyword):
+            return not isinstance(value, bool)
+        if not self.boolean_exclusive_bounds or not isinstance(value, bool):
+            return False
+        sibling = "minimum" if keyword == "exclusiveMinimum" else "maximum"
+        return isinstance(node, dict) and sibling in node
 
     def enforces_format(self, name: str) -> bool:
         """Return whether the concrete checker can assert format *name*.

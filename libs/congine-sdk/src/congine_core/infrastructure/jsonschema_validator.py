@@ -225,12 +225,18 @@ def derive_capability(
         # advertised as enforced however well known a name is.
         enforced.discard("format")
 
+    # Draft 4 asserts the exclusive bounds inside `minimum`/`maximum` rather
+    # than through handlers of their own, so handler presence alone would
+    # report a genuinely enforceable draft-4 contract as unenforceable.
+    boolean_bounds = "minimum" in handlers and "exclusiveMinimum" not in handlers
+
     return SemanticCapability(
         draft=_draft_name(validator_cls),
         enforced_keywords=frozenset(enforced),
         format_assertion=format_checking,
         supported_formats=formats,
         allow_external_references=False,
+        boolean_exclusive_bounds=boolean_bounds,
     )
 
 

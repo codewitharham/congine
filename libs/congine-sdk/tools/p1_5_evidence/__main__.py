@@ -15,7 +15,12 @@ import json
 import sys
 from typing import List
 
-from tools.p1_5_evidence import benchmark, capability, policy_truth
+from tools.p1_5_evidence import (
+    benchmark,
+    capability,
+    deadline_fidelity,
+    policy_truth,
+)
 
 #: Capabilities admission currently advertises as enforced. A silent pass here
 #: means admission is lying, so the corpus fails.
@@ -153,12 +158,21 @@ def main(argv: List[str] | None = None) -> int:
     forwarded = [a for a in args if a in ("--json", "--quick")]
     if mode == "benchmark":
         return benchmark.main(forwarded)
+    if mode == "deadline":
+        record = deadline_fidelity.run()
+        if as_json:
+            print(json.dumps(record, indent=1, sort_keys=True))
+        else:
+            print(deadline_fidelity.render(record))
+        # Observational: a blocking result is reported, not raised, so the
+        # founder decision stays explicit rather than implied by an exit code.
+        return 0
     if mode == "all":
         rc = _capability(as_json, live_server="--live-server" in args)
         print()
         benchmark.main(forwarded)
         return rc
-    print(f"unknown mode {mode!r}; expected capability | benchmark | all")
+    print(f"unknown mode {mode!r}; expected capability | benchmark | deadline | all")
     return 2
 
 
