@@ -29,6 +29,7 @@ from congine_core.ports.circuit_breaker import ICircuitBreaker
 from congine_core.ports.contract_repository import IContractRepository
 from congine_core.ports.logger import ILogger
 from congine_core.ports.schema_storage import ISchemaStorage
+from congine_core.semantic_capability import SemanticCapability
 
 try:  # Advisory inter-process lock for single-flight boot (audit D-7).
     import portalocker
@@ -60,6 +61,7 @@ class SyncContractsUseCase:
         boot_lock_path: Optional[str] = None,
         semantic_validation_enabled: bool = False,
         semantic_format_checking: bool = False,
+        semantic_capability: Optional[SemanticCapability] = None,
         admission_mode: ContractAdmissionMode = ContractAdmissionMode.STRICT,
     ) -> None:
         """Constructor injection of all collaborators.
@@ -82,6 +84,13 @@ class SyncContractsUseCase:
             semantic_format_checking: Whether the semantic evaluator asserts
                 ``format``. Only meaningful when *semantic_validation_enabled*
                 is ``True``; it widens the enforced-keyword capability set.
+            semantic_capability: What the wired evaluator genuinely enforces,
+                derived from the concrete validator at composition time. When
+                supplied it **replaces** the static keyword set below, because
+                that set is dialect-blind: measured across the supported drafts
+                it over-claimed up to 11 keywords on draft4 (P1.5-A0.1). Left
+                ``None`` the legacy static behaviour is preserved, so existing
+                callers are unaffected.
             admission_mode: How strictly contracts are admitted (audit
                 P0-03/P0-04). ``WARN`` relaxes *compatibility* advisories only —
                 it can never admit a contract whose meaning CONGINE cannot
@@ -109,8 +118,14 @@ class SyncContractsUseCase:
         # "is semantic validation on?" flag — the question admission needs
         # answered is per-keyword, and will differ per evaluator as more are
         # added (audit P0-04).
+        self._semantic_capability = semantic_capability
         enforced = set(NATIVE_ENFORCED_KEYWORDS)
-        if semantic_validation_enabled:
+        if semantic_capability is not None:
+            # Derived capability wins: it reflects the handlers the configured
+            # dialect actually installs, rather than a fixed list that is true
+            # only of the newest draft.
+            enforced |= set(semantic_capability.enforced_keywords)
+        elif semantic_validation_enabled:
             enforced |= SEMANTIC_ENFORCED_KEYWORDS
             if semantic_format_checking:
                 enforced.add("format")
@@ -333,6 +348,7 @@ class SyncContractsUseCase:
                 schema,
                 mode=self.admission_mode,
                 enforced_keywords=self._enforced_keywords,
+                capability=self._semantic_capability,
             )
         except Exception as exc:  # a defect here must fail closed, not fail open
             self._record_rejection(

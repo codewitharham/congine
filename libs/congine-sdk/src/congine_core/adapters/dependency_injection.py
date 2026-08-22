@@ -373,6 +373,11 @@ class ServiceContainer:
             circuit_breaker=self.circuit_breaker,
             boot_lock_path=boot_lock_path,
             semantic_validation_enabled=config.semantic_validation_enabled,
+            semantic_capability=(
+                self.semantic_validator.capability
+                if config.semantic_validation_enabled
+                else None
+            ),
             semantic_format_checking=config.semantic_format_checking,
             admission_mode=config.contract_admission,
         )

@@ -15,16 +15,14 @@ import json
 import sys
 from typing import List
 
-from tools.p1_5_evidence import benchmark, capability
+from tools.p1_5_evidence import benchmark, capability, policy_truth
 
 #: Capabilities admission currently advertises as enforced. A silent pass here
 #: means admission is lying, so the corpus fails.
 _MUST_ENFORCE = ("pattern", "patternProperties", "ref-local-valid")
 
-#: Known-untruthful advertisements confirmed in Slice A0. Listed so the corpus
-#: reports them as *expected findings* rather than surprises, and so the entry
-#: disappears the moment Slice B fixes admission.
-_KNOWN_UNTRUTHFUL = ("contentEncoding", "contentMediaType")
+# End-to-end policy truth lives in `policy_truth`; this corpus no longer keeps
+# an allowlist of tolerated untruthful advertisements.
 
 
 def _capability(as_json: bool, live_server: bool = False) -> int:
@@ -72,6 +70,9 @@ def _capability(as_json: bool, live_server: bool = False) -> int:
     if not all(r["enforced"] for r in hermetic_local.values()):
         failures.append("no-retrieval registry broke valid local references")
 
+    policy_failures, policy_lines = policy_truth.evaluate()
+    failures.extend(policy_failures)
+
     if as_json:
         print(
             json.dumps(
@@ -85,6 +86,7 @@ def _capability(as_json: bool, live_server: bool = False) -> int:
                     "hermetic_external_ref": hermetic_external,
                     "hermetic_local_ref": hermetic_local,
                     "failures": failures,
+                    "policy_truth": policy_lines,
                     "retrieval_observed": retrieval,
                 },
                 indent=1,
@@ -97,8 +99,6 @@ def _capability(as_json: bool, live_server: bool = False) -> int:
         print("-" * 78)
         for name, row in sorted(rows.items()):
             mark = ""
-            if name in _KNOWN_UNTRUTHFUL and row["outcomes"] == ["silent-pass"]:
-                mark = "   <-- admitted but NOT enforced (A0 finding)"
             if row["retrieval_observed"]:
                 mark = "   <-- NETWORK RETRIEVAL OBSERVED"
             print(
@@ -126,12 +126,20 @@ def _capability(as_json: bool, live_server: bool = False) -> int:
         )
         if retrieval:
             print(f"live-server retrieval observed on: {', '.join(retrieval)}")
+        print()
+        print("END-TO-END POLICY TRUTH (admission vs. evaluator reality):")
+        for line in policy_lines:
+            print(line)
+        print()
         if failures:
             print("FAILURES:")
             for line in failures:
                 print(f"  {line}")
         else:
-            print("All capabilities admission requires are genuinely enforced.")
+            print(
+                "Admission refuses everything the wired evaluator cannot enforce, "
+                "and admits everything it can."
+            )
     return 1 if failures else 0
 
 

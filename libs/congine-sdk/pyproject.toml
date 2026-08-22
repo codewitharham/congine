@@ -28,6 +28,16 @@ dependencies = [
     "httpx>=0.28",
     "jsonschema>=4.23",
     "portalocker>=2.8",
+    # Direct, not incidental. CONGINE constructs an explicit no-retrieval
+    # `Registry` so semantic evaluation can never fetch an external `$ref`:
+    # left to itself the library performs a real network request and lets the
+    # remote document decide enforcement (P1.5-A0-2). `jsonschema` does not
+    # re-export `Registry`, so the supported API is only reachable by importing
+    # `referencing` directly. It is already in the graph transitively via
+    # `jsonschema`; the floor matches jsonschema's own (`>=0.28.4`), verified by
+    # installing that exact version and confirming both `Registry(retrieve=...)`
+    # and `NoSuchResource(ref=...)` exist there.
+    "referencing>=0.28.4",
 ]
 
 [project.urls]

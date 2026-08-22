@@ -320,6 +320,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "portalocker" },
+    { name = "referencing" },
 ]
 
 [package.optional-dependencies]
@@ -354,6 +355,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "referencing", specifier = ">=0.28.4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.15" },
     { name = "types-jsonschema", marker = "extra == 'dev'", specifier = ">=4.23" },
 ]

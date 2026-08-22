@@ -88,13 +88,18 @@ NATIVE_ENFORCED_KEYWORDS: frozenset[str] = (
 # only when ``semantic_format_checking`` is *additionally* enabled, so listing it
 # unconditionally would be precisely the false-safety claim admission exists to
 # prevent. The caller adds it when that flag is on.
+#
+# ``contentEncoding`` and ``contentMediaType`` are excluded for the same reason,
+# established by measurement rather than by reading the spec: they are
+# **annotation-only on every supported draft** (verified draft4 through 2020-12
+# in P1.5-A0-3). No validator installs a handler for either, so a contract using
+# them was admitted and then enforced nothing — a G12 violation, and exactly the
+# false-safety this module exists to prevent.
 SEMANTIC_ENFORCED_KEYWORDS: frozenset[str] = frozenset(
     {
         # string
         "minLength",
         "maxLength",
-        "contentEncoding",
-        "contentMediaType",
         # numeric
         "exclusiveMinimum",
         "exclusiveMaximum",
