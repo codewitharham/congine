@@ -1,0 +1,570 @@
+{
+ "cases": {
+  "native-large": {
+   "digest": "3a6bdea01affc6b6b06124e68a4011e82d95753bf218d5372feadb9e6f79de11",
+   "eval": {
+    "iterations": 30,
+    "max": 4.6085,
+    "p50": 3.24,
+    "p95": 4.356,
+    "p99": 4.6085
+   },
+   "native": {
+    "iterations": 30,
+    "max": 2.2699,
+    "p50": 0.4428,
+    "p95": 1.2572,
+    "p99": 2.2699
+   },
+   "prep": {
+    "iterations": 30,
+    "max": 427.5306,
+    "p50": 255.5063,
+    "p95": 398.9577,
+    "p99": 427.5306
+   },
+   "prep_share_pct": 104.8,
+   "semantic_total": {
+    "iterations": 30,
+    "max": 474.7728,
+    "p50": 243.7596,
+    "p95": 319.6489,
+    "p99": 474.7728
+   },
+   "semantic_vs_native": 550.5,
+   "static_features": {
+    "bytes": 2950,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 2,
+    "nodes": 122,
+    "properties": 120,
+    "refs": 0,
+    "regex_chars": 0,
+    "regexes": 0,
+    "semantic_keywords": 0
+   }
+  },
+  "native-medium": {
+   "digest": "6092d3a4eef0cda77a12794974f672f130094d2bad41f0465ff073e1f44fe4d2",
+   "eval": {
+    "iterations": 120,
+    "max": 5.111,
+    "p50": 0.6381,
+    "p95": 1.9524,
+    "p99": 3.7267
+   },
+   "native": {
+    "iterations": 120,
+    "max": 0.5785,
+    "p50": 0.1523,
+    "p95": 0.4515,
+    "p99": 0.5545
+   },
+   "prep": {
+    "iterations": 120,
+    "max": 3566.925,
+    "p50": 162.7657,
+    "p95": 1993.1643,
+    "p99": 3456.9536
+   },
+   "prep_share_pct": 197.3,
+   "semantic_total": {
+    "iterations": 120,
+    "max": 1517.5628,
+    "p50": 82.4921,
+    "p95": 1092.1272,
+    "p99": 1488.1806
+   },
+   "semantic_vs_native": 541.6,
+   "static_features": {
+    "bytes": 650,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 2,
+    "nodes": 27,
+    "properties": 25,
+    "refs": 0,
+    "regex_chars": 0,
+    "regexes": 0,
+    "semantic_keywords": 0
+   }
+  },
+  "native-small": {
+   "digest": "a8b61e957ca3aee26c3729781174df9124efc471373dbeee239e9ea43c2ba15f",
+   "eval": {
+    "iterations": 120,
+    "max": 1.6704,
+    "p50": 0.0729,
+    "p95": 0.4346,
+    "p99": 1.1967
+   },
+   "native": {
+    "iterations": 120,
+    "max": 2.3744,
+    "p50": 0.026,
+    "p95": 0.1006,
+    "p99": 1.241
+   },
+   "prep": {
+    "iterations": 120,
+    "max": 45.0078,
+    "p50": 10.3404,
+    "p95": 15.7976,
+    "p99": 37.3914
+   },
+   "prep_share_pct": 107.7,
+   "semantic_total": {
+    "iterations": 120,
+    "max": 22.9957,
+    "p50": 9.5973,
+    "p95": 17.48,
+    "p99": 19.8703
+   },
+   "semantic_vs_native": 369.1,
+   "static_features": {
+    "bytes": 129,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 2,
+    "nodes": 5,
+    "properties": 3,
+    "refs": 0,
+    "regex_chars": 0,
+    "regexes": 0,
+    "semantic_keywords": 0
+   }
+  },
+  "semantic-combinator-20": {
+   "digest": "adeab111550f24af6063209669d2713bd22dd7688cb23f73b13caeea49f996e7",
+   "eval": {
+    "iterations": 120,
+    "max": 9.2506,
+    "p50": 1.3651,
+    "p95": 5.7208,
+    "p99": 7.5061
+   },
+   "native": {
+    "iterations": 120,
+    "max": 1.2128,
+    "p50": 0.0441,
+    "p95": 0.1037,
+    "p99": 0.1773
+   },
+   "prep": {
+    "iterations": 120,
+    "max": 395.3568,
+    "p50": 117.082,
+    "p95": 292.4884,
+    "p99": 376.7114
+   },
+   "prep_share_pct": 99.7,
+   "semantic_total": {
+    "iterations": 120,
+    "max": 257.6646,
+    "p50": 117.3935,
+    "p95": 195.255,
+    "p99": 254.3712
+   },
+   "semantic_vs_native": 2662.0,
+   "static_features": {
+    "bytes": 2402,
+    "combinators": 40,
+    "enum_values": 0,
+    "max_depth": 3,
+    "nodes": 102,
+    "properties": 20,
+    "refs": 0,
+    "regex_chars": 240,
+    "regexes": 40,
+    "semantic_keywords": 80
+   }
+  },
+  "semantic-enum-10x200": {
+   "digest": "43f8b321baa1647c947d52c6ee94f8b6d24910381da6fd20af249aa1478accd6",
+   "eval": {
+    "iterations": 30,
+    "max": 13.1627,
+    "p50": 0.4146,
+    "p95": 3.6233,
+    "p99": 13.1627
+   },
+   "native": {
+    "iterations": 30,
+    "max": 0.2331,
+    "p50": 0.0402,
+    "p95": 0.1747,
+    "p99": 0.2331
+   },
+   "prep": {
+    "iterations": 30,
+    "max": 247.0327,
+    "p50": 34.828,
+    "p95": 78.7969,
+    "p99": 247.0327
+   },
+   "prep_share_pct": 89.5,
+   "semantic_total": {
+    "iterations": 30,
+    "max": 75.5316,
+    "p50": 38.9262,
+    "p95": 68.4134,
+    "p99": 75.5316
+   },
+   "semantic_vs_native": 968.3,
+   "static_features": {
+    "bytes": 13252,
+    "combinators": 0,
+    "enum_values": 2000,
+    "max_depth": 3,
+    "nodes": 12,
+    "properties": 10,
+    "refs": 0,
+    "regex_chars": 0,
+    "regexes": 0,
+    "semantic_keywords": 0
+   }
+  },
+  "semantic-large": {
+   "digest": "27ea7c825005006110358005cb95a166890f4afdf8df7a98830dd8f053f5435e",
+   "eval": {
+    "iterations": 30,
+    "max": 10.094,
+    "p50": 6.5312,
+    "p95": 9.9639,
+    "p99": 10.094
+   },
+   "native": {
+    "iterations": 30,
+    "max": 7.9019,
+    "p50": 4.7251,
+    "p95": 7.8786,
+    "p99": 7.9019
+   },
+   "prep": {
+    "iterations": 30,
+    "max": 551.5792,
+    "p50": 323.3763,
+    "p95": 460.8479,
+    "p99": 551.5792
+   },
+   "prep_share_pct": 118.2,
+   "semantic_total": {
+    "iterations": 30,
+    "max": 639.5534,
+    "p50": 273.6507,
+    "p95": 502.2879,
+    "p99": 639.5534
+   },
+   "semantic_vs_native": 57.9,
+   "static_features": {
+    "bytes": 9310,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 2,
+    "nodes": 122,
+    "properties": 120,
+    "refs": 0,
+    "regex_chars": 1320,
+    "regexes": 120,
+    "semantic_keywords": 240
+   }
+  },
+  "semantic-medium": {
+   "digest": "be9dc2da68494e582a29e0865c07a821e15acfd0778746e40342578a446a3779",
+   "eval": {
+    "iterations": 120,
+    "max": 3.9663,
+    "p50": 1.0109,
+    "p95": 2.8349,
+    "p99": 3.9156
+   },
+   "native": {
+    "iterations": 120,
+    "max": 3.257,
+    "p50": 0.9385,
+    "p95": 2.5927,
+    "p99": 3.2546
+   },
+   "prep": {
+    "iterations": 120,
+    "max": 95.6972,
+    "p50": 60.018,
+    "p95": 79.4734,
+    "p99": 83.6718
+   },
+   "prep_share_pct": 97.6,
+   "semantic_total": {
+    "iterations": 120,
+    "max": 203.4578,
+    "p50": 61.4729,
+    "p95": 84.8238,
+    "p99": 125.2049
+   },
+   "semantic_vs_native": 65.5,
+   "static_features": {
+    "bytes": 1975,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 2,
+    "nodes": 27,
+    "properties": 25,
+    "refs": 0,
+    "regex_chars": 275,
+    "regexes": 25,
+    "semantic_keywords": 50
+   }
+  },
+  "semantic-nested-d4": {
+   "digest": "32c36919bd186b6b689cc54028c7b35c53250c9a207d216a46d30e76ea7ed60d",
+   "eval": {
+    "iterations": 120,
+    "max": 78.5606,
+    "p50": 3.8504,
+    "p95": 11.9371,
+    "p99": 30.8225
+   },
+   "native": {
+    "iterations": 120,
+    "max": 0.2866,
+    "p50": 0.0288,
+    "p95": 0.0617,
+    "p99": 0.1733
+   },
+   "prep": {
+    "iterations": 120,
+    "max": 505.3891,
+    "p50": 224.7896,
+    "p95": 417.8919,
+    "p99": 480.1621
+   },
+   "prep_share_pct": 76.4,
+   "semantic_total": {
+    "iterations": 120,
+    "max": 1008.3435,
+    "p50": 294.1914,
+    "p95": 573.1334,
+    "p99": 800.5893
+   },
+   "semantic_vs_native": 10215.0,
+   "static_features": {
+    "bytes": 4511,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 8,
+    "nodes": 161,
+    "properties": 120,
+    "refs": 0,
+    "regex_chars": 0,
+    "regexes": 0,
+    "semantic_keywords": 81
+   }
+  },
+  "semantic-nested-d6": {
+   "digest": "41bac80c4937c8e05d4f481e3cfb732322afef4c29e57e297d30d9ce99279411",
+   "eval": {
+    "iterations": 30,
+    "max": 86.0984,
+    "p50": 25.9247,
+    "p95": 72.6886,
+    "p99": 86.0984
+   },
+   "native": {
+    "iterations": 30,
+    "max": 0.1581,
+    "p50": 0.0259,
+    "p95": 0.0292,
+    "p99": 0.1581
+   },
+   "prep": {
+    "iterations": 30,
+    "max": 3371.3855,
+    "p50": 2903.5612,
+    "p95": 3214.3925,
+    "p99": 3371.3855
+   },
+   "prep_share_pct": 181.3,
+   "semantic_total": {
+    "iterations": 30,
+    "max": 2059.8036,
+    "p50": 1601.1213,
+    "p95": 1896.9143,
+    "p99": 2059.8036
+   },
+   "semantic_vs_native": 61819.4,
+   "static_features": {
+    "bytes": 40799,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 12,
+    "nodes": 1457,
+    "properties": 1092,
+    "refs": 0,
+    "regex_chars": 0,
+    "regexes": 0,
+    "semantic_keywords": 729
+   }
+  },
+  "semantic-refs-40": {
+   "digest": "e96ff2c011676521ebdbfbc2919be04c434c8bafe0d5b46febe5083ce51de55c",
+   "eval": {
+    "iterations": 30,
+    "max": 7.8704,
+    "p50": 2.5989,
+    "p95": 7.2291,
+    "p99": 7.8704
+   },
+   "native": {
+    "iterations": 30,
+    "max": 0.1752,
+    "p50": 0.0732,
+    "p95": 0.1491,
+    "p99": 0.1752
+   },
+   "prep": {
+    "iterations": 30,
+    "max": 88.0627,
+    "p50": 50.3947,
+    "p95": 79.1955,
+    "p99": 88.0627
+   },
+   "prep_share_pct": 53.7,
+   "semantic_total": {
+    "iterations": 30,
+    "max": 154.1333,
+    "p50": 93.8056,
+    "p95": 142.624,
+    "p99": 154.1333
+   },
+   "semantic_vs_native": 1281.5,
+   "static_features": {
+    "bytes": 1163,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 2,
+    "nodes": 44,
+    "properties": 40,
+    "refs": 40,
+    "regex_chars": 0,
+    "regexes": 0,
+    "semantic_keywords": 43
+   }
+  },
+  "semantic-small": {
+   "digest": "5b37a8f6c6142189c0f549338c86c71375fb76a0c3e5b90e352c9acbd87936e5",
+   "eval": {
+    "iterations": 120,
+    "max": 0.7615,
+    "p50": 0.1154,
+    "p95": 0.4814,
+    "p99": 0.6502
+   },
+   "native": {
+    "iterations": 120,
+    "max": 1.4295,
+    "p50": 0.1193,
+    "p95": 0.5484,
+    "p99": 0.9638
+   },
+   "prep": {
+    "iterations": 120,
+    "max": 21.9386,
+    "p50": 9.9506,
+    "p95": 14.6398,
+    "p99": 17.7334
+   },
+   "prep_share_pct": 97.1,
+   "semantic_total": {
+    "iterations": 120,
+    "max": 16.6176,
+    "p50": 10.2499,
+    "p95": 14.8997,
+    "p99": 16.4672
+   },
+   "semantic_vs_native": 85.9,
+   "static_features": {
+    "bytes": 288,
+    "combinators": 0,
+    "enum_values": 0,
+    "max_depth": 2,
+    "nodes": 5,
+    "properties": 3,
+    "refs": 0,
+    "regex_chars": 33,
+    "regexes": 3,
+    "semantic_keywords": 6
+   }
+  }
+ },
+ "draft": "draft202012",
+ "fixture_manifest": {
+  "native-large": {
+   "bytes": 2950,
+   "digest": "3a6bdea01affc6b6b06124e68a4011e82d95753bf218d5372feadb9e6f79de11",
+   "nodes": 122
+  },
+  "native-medium": {
+   "bytes": 650,
+   "digest": "6092d3a4eef0cda77a12794974f672f130094d2bad41f0465ff073e1f44fe4d2",
+   "nodes": 27
+  },
+  "native-small": {
+   "bytes": 129,
+   "digest": "a8b61e957ca3aee26c3729781174df9124efc471373dbeee239e9ea43c2ba15f",
+   "nodes": 5
+  },
+  "semantic-combinator-20": {
+   "bytes": 2402,
+   "digest": "adeab111550f24af6063209669d2713bd22dd7688cb23f73b13caeea49f996e7",
+   "nodes": 102
+  },
+  "semantic-enum-10x200": {
+   "bytes": 13252,
+   "digest": "43f8b321baa1647c947d52c6ee94f8b6d24910381da6fd20af249aa1478accd6",
+   "nodes": 12
+  },
+  "semantic-large": {
+   "bytes": 9310,
+   "digest": "27ea7c825005006110358005cb95a166890f4afdf8df7a98830dd8f053f5435e",
+   "nodes": 122
+  },
+  "semantic-medium": {
+   "bytes": 1975,
+   "digest": "be9dc2da68494e582a29e0865c07a821e15acfd0778746e40342578a446a3779",
+   "nodes": 27
+  },
+  "semantic-nested-d4": {
+   "bytes": 4511,
+   "digest": "32c36919bd186b6b689cc54028c7b35c53250c9a207d216a46d30e76ea7ed60d",
+   "nodes": 161
+  },
+  "semantic-nested-d6": {
+   "bytes": 40799,
+   "digest": "41bac80c4937c8e05d4f481e3cfb732322afef4c29e57e297d30d9ce99279411",
+   "nodes": 1457
+  },
+  "semantic-refs-40": {
+   "bytes": 1163,
+   "digest": "e96ff2c011676521ebdbfbc2919be04c434c8bafe0d5b46febe5083ce51de55c",
+   "nodes": 44
+  },
+  "semantic-small": {
+   "bytes": 288,
+   "digest": "5b37a8f6c6142189c0f549338c86c71375fb76a0c3e5b90e352c9acbd87936e5",
+   "nodes": 5
+  }
+ },
+ "format_checking": false,
+ "kind": "p1_5_benchmark",
+ "platform": {
+  "google_re2": "1.1.20251105",
+  "implementation": "CPython",
+  "jsonschema": "4.26.0",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 140 Stepping 1, GenuineIntel",
+  "python": "3.14.6",
+  "referencing": "0.37.0"
+ },
+ "quick": false,
+ "warmup": 5
+}
