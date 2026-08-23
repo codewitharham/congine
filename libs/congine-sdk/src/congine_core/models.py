@@ -74,6 +74,30 @@ class DegradedReason(StrEnum):
     #: The cached schema could not be measured, so its size bound could not be
     #: enforced (audit P0-02).
     INVALID_CONTRACT = "invalid_contract"
+    #: Semantic evaluation could not complete inside its applicable budget
+    #: (P1.5). Deliberately distinct from :attr:`TIMEOUT`: an operator seeing
+    #: this needs to look at contract complexity or the semantic budget, not at
+    #: the native rule engine, and the two were previously indistinguishable.
+    SEMANTIC_TIMEOUT = "semantic_timeout"
+
+
+class EvaluationStage(StrEnum):
+    """Which validation stage produced an outcome (P1.5).
+
+    Governed validation runs native rules first and, when enabled, semantic
+    evaluation second, each against its own budget. Without this, a degraded
+    result said *that* enforcement failed but never *where*, so a semantic
+    overrun and a native overrun looked identical.
+
+    ``StrEnum`` for the same reason as :class:`DegradedReason`: these values
+    cross process boundaries into logs and telemetry, and a plain ``(str, Enum)``
+    would render as ``"EvaluationStage.NATIVE"`` under interpolation.
+    """
+
+    #: In-process deterministic rule evaluation.
+    NATIVE = "native"
+    #: Full JSON Schema evaluation by the configured semantic evaluator.
+    SEMANTIC = "semantic"
 
 
 @dataclass(frozen=True)
@@ -104,6 +128,9 @@ class ValidationResult:
         degraded_reason: Optional :class:`DegradedReason` when ``degraded`` is
             ``True``. Typed, but ``StrEnum``-backed, so it compares equal to its
             wire value (``result.degraded_reason == "timeout"``).
+        evaluation_stage: Which stage produced this outcome, when the distinction
+            is meaningful. ``None`` for results that predate staged evaluation or
+            that never reached a stage at all.
     """
 
     status: str
@@ -111,6 +138,9 @@ class ValidationResult:
     duration_ms: float = 0.0
     degraded: bool = False
     degraded_reason: Optional[str] = None
+    #: Which stage the outcome came from. Appended with a default so existing
+    #: positional construction keeps working (P1.5).
+    evaluation_stage: Optional[EvaluationStage] = None
 
     def is_pass(self) -> bool:
         """Return ``True`` if validation passed.
@@ -182,6 +212,8 @@ class TelemetryEvent:
         duration_ms: Wall-clock validation time in milliseconds.
         breach_details: List of serialized breach mappings.
         created_at: UTC creation timestamp (defaulted if omitted).
+        degraded_reason: Why enforcement could not complete, when it could not.
+        evaluation_stage: Which stage the outcome came from, when meaningful.
     """
 
     contract_id: str
@@ -190,6 +222,12 @@ class TelemetryEvent:
     duration_ms: float
     breach_details: list[dict[str, Any]] = field(default=None)  # type: ignore[arg-type]
     created_at: datetime = field(default=None)  # type: ignore[assignment]
+    #: Appended optional machine-facing fields (P1.5). They exist so an operator
+    #: can tell a native timeout from a semantic timeout, and either from a load
+    #: shed. The serializer emits them **only when set**, so the wire shape of an
+    #: ordinary successful event is unchanged.
+    degraded_reason: Optional[str] = None
+    evaluation_stage: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.breach_details is None:

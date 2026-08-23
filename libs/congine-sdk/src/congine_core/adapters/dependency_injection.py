@@ -355,11 +355,22 @@ class ServiceContainer:
 
         self.validate_contract_usecase = ValidateContractUseCase(
             schema_storage=self.schema_storage,
-            validator=self.validator,
+            # The NATIVE validator only. The use case schedules each stage under
+            # its own budget, so handing it `self.validator` — which is a
+            # CompositeValidator when semantic validation is on — would evaluate
+            # semantics twice and make the stage budgets meaningless. The use
+            # case refuses that combination at construction; this is the wiring
+            # that keeps it from arising.
+            validator=rule_validator,
+            semantic_validator=(
+                self.semantic_validator if config.semantic_validation_enabled else None
+            ),
             event_bus=self.event_bus,
             logger=self.logger,
             timer=self.validation_executor,
             timeout_ms=config.validation_timeout_ms,
+            native_timeout_ms=config.native_validation_timeout_ms,
+            semantic_timeout_ms=config.semantic_validation_timeout_ms,
             fail_mode=config.fail_mode,
             max_payload_bytes=config.max_payload_bytes,
             max_schema_bytes=config.max_schema_bytes,
@@ -534,6 +545,19 @@ class ServiceContainer:
         dropped_total = getattr(self.event_bus, "dropped_total", None)
         runner_health = self.validation_executor.health()
         return {
+            # Static configured budget truth (P1.5). These are *budgets*, not
+            # hard real-time deadlines. A `None` stage cap is reported as None
+            # rather than as the aggregate: it means "inherit whatever remains
+            # when the stage starts", whose effective value varies per call, and
+            # printing a fixed number would invent a guarantee.
+            "validation_aggregate_budget_ms": self.config.validation_timeout_ms,
+            "validation_native_stage_cap_ms": (
+                self.config.native_validation_timeout_ms
+            ),
+            "validation_semantic_stage_cap_ms": (
+                self.config.semantic_validation_timeout_ms
+            ),
+            "semantic_validation_enabled": self.config.semantic_validation_enabled,
             "cache_entries": self.schema_storage.size(),
             "validation_in_flight": runner_health.get("in_flight"),
             "validation_rejected_total": runner_health.get("rejected_total"),

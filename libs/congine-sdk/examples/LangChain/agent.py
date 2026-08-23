@@ -122,7 +122,14 @@ def process_untrusted_customer_ticket(
 def dissect_and_print_breaches(
     contract_id: str, failed_payload: Dict[str, Any]
 ) -> None:
-    """Diagnostic helper to extract and display contract failure logs."""
+    """Diagnostic helper to extract and display contract failure logs.
+
+    Deliberately uses the low-level unbudgeted validator: this only re-inspects
+    a payload the guard has *already* judged, so it must not be mistaken for the
+    governed path. Governed enforcement in this example runs through
+    ``@congine_guard`` -> ``ValidateContractUseCase``, which is what carries the
+    aggregate deadline and stage budgets.
+    """
     active_schema = container.schema_storage.get(contract_id)
     audit_trail = container.validator.validate(failed_payload, active_schema)
     for breach in audit_trail.breaches:

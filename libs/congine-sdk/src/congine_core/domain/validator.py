@@ -475,6 +475,15 @@ class LocalValidator:
 class CompositeValidator:
     """Compose a rule-based :class:`IValidator` with an :class:`ISemanticValidator`.
 
+    .. warning:: **Low-level, unbudgeted API.** This runs both stages back to
+       back with no deadline of any kind. Since P1.5 the governed enforcement
+       boundary is :class:`~congine_core.usecases.validate_contract_usecase.ValidateContractUseCase`,
+       which owns the aggregate deadline, schedules each stage under its own
+       budget, and reports which stage failed. Calling this directly — including
+       via ``ServiceContainer.validator`` — gives you validation without any of
+       that, so it is appropriate for diagnostics and tests, not for a governed
+       product path.
+
     Both collaborators are constructor-injected (composition, not inheritance);
     the semantic validator is consumed purely through its protocol so the domain
     never imports a concrete (e.g. ``jsonschema``-backed) implementation. The

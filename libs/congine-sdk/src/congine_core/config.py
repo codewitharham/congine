@@ -177,6 +177,12 @@ class CongineConfig:
 
     # --- Validation ------------------------------------------------------- #
     validation_timeout_ms: int = DEFAULT_VALIDATION_TIMEOUT_MS
+    #: Optional per-stage caps inside the aggregate validation budget (P1.5).
+    #: ``None`` means "inherit whatever aggregate budget remains when this stage
+    #: starts", which is why the effective value varies with stage start time and
+    #: cannot be reported as a fixed number.
+    native_validation_timeout_ms: Optional[int] = None
+    semantic_validation_timeout_ms: Optional[int] = None
     fail_mode: FailMode = FailMode.DEGRADE
 
     # --- Cache ------------------------------------------------------------ #
@@ -306,6 +312,7 @@ class CongineConfig:
                 ) from exc
             object.__setattr__(self, name, coerced)
 
+        self._validate_stage_budgets()
         self.validate()
 
     @staticmethod
@@ -409,6 +416,12 @@ class CongineConfig:
             validation_timeout_ms=cls._env_int(
                 "CONGINE_TIMEOUT_MS", DEFAULT_VALIDATION_TIMEOUT_MS
             ),
+            native_validation_timeout_ms=cls._env_optional_int(
+                "CONGINE_NATIVE_TIMEOUT_MS"
+            ),
+            semantic_validation_timeout_ms=cls._env_optional_int(
+                "CONGINE_SEMANTIC_TIMEOUT_MS"
+            ),
             fail_mode=fail_mode,
             cache_capacity=cls._env_int("CONGINE_CACHE_CAPACITY", 500),
             cache_ttl_seconds=cls._env_int("CONGINE_CACHE_TTL", 300),
@@ -487,6 +500,40 @@ class CongineConfig:
         # No validate() call here: construction validates (see __post_init__), so
         # validation has exactly one owner and no caller has to remember it.
         return config
+
+    def _validate_stage_budgets(self) -> None:
+        """Reject stage caps that could not mean what they appear to mean.
+
+        Checked here rather than in :meth:`validate`, which returns early for a
+        local ``base_url`` — a stage cap must be validated on every construction
+        path, not only for remote deployments (G13).
+
+        A cap larger than the aggregate budget is refused rather than silently
+        clamped: it reads as "semantic may take 500 ms" while the aggregate would
+        cut it off at 100 ms, and quietly honouring the smaller number is exactly
+        the kind of gap between stated and actual policy this phase exists to
+        close.
+        """
+        for name in ("native_validation_timeout_ms", "semantic_validation_timeout_ms"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            # bool is an int subclass; `True` must not read as a 1 ms budget.
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise CongineConfigurationError(
+                    f"Invalid {name}: expected a positive integer of milliseconds "
+                    f"or None, got {type(value).__name__}"
+                )
+            if value <= 0:
+                raise CongineConfigurationError(
+                    f"Invalid {name}: must be greater than 0, got {value}"
+                )
+            if value > self.validation_timeout_ms:
+                raise CongineConfigurationError(
+                    f"Invalid {name}: {value}ms exceeds the aggregate "
+                    f"validation_timeout_ms of {self.validation_timeout_ms}ms. A "
+                    "stage cannot be given more time than the whole validation."
+                )
 
     def validate(self) -> None:
         """Validate completeness and security policy (audit H4)."""
@@ -599,6 +646,30 @@ class CongineConfig:
                 "or provide a directory path."
             )
         return raw
+
+    @staticmethod
+    def _env_optional_int(name: str) -> "Optional[int]":
+        """Read an optional integer env var.
+
+        Unset means "inherit the remaining aggregate budget". An **empty** value
+        is an error rather than a silent ``None``: ``CONGINE_NATIVE_TIMEOUT_MS=``
+        almost always means a misconfigured deployment, and treating it as
+        "unset" would hide that.
+        """
+        raw = os.getenv(name)
+        if raw is None:
+            return None
+        if not raw.strip():
+            raise CongineConfigurationError(
+                f"Invalid integer for {name}: empty value. Unset the variable to "
+                "inherit the aggregate budget."
+            )
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise CongineConfigurationError(
+                f"Invalid integer for {name}: {raw!r}"
+            ) from exc
 
     @staticmethod
     def _env_int(name: str, default: int) -> int:

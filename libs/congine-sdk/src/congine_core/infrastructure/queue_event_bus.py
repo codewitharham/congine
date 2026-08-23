@@ -429,7 +429,7 @@ class QueueEventBus:
         created_at = getattr(event, "created_at", None)
         if created_at is not None and hasattr(created_at, "isoformat"):
             created_at = created_at.isoformat()
-        return {
+        payload: Dict[str, Any] = {
             "contract_id": getattr(event, "contract_id", None),
             "contract_version": getattr(event, "contract_version", None),
             "status": getattr(event, "status", None),
@@ -437,3 +437,11 @@ class QueueEventBus:
             "breach_details": getattr(event, "breach_details", None),
             "created_at": created_at,
         }
+        # Emitted only when present, so an ordinary successful event keeps its
+        # exact previous wire shape. Adding unconditional null keys would change
+        # the payload every consumer already parses, for no benefit (P1.5).
+        for optional in ("degraded_reason", "evaluation_stage"):
+            value = getattr(event, optional, None)
+            if value is not None:
+                payload[optional] = str(value)
+        return payload

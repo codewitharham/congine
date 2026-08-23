@@ -106,7 +106,9 @@ Every field of `CongineConfig` is settable via `CONGINE_*` environment variables
 | `project_id` | `CONGINE_PROJECT_ID` | _required for non-local_ | Project identifier. Sent as `X-Project-ID`; scopes the snapshot path. |
 | `tenant_id` | `CONGINE_TENANT_ID` | _required for non-local_ | Tenant identifier. Sent as `X-Tenant-ID`; scopes the snapshot path. |
 | `region` | `CONGINE_REGION` | `us` | `us` \| `eu` \| `apac`. **Metadata only — it does not select an endpoint.** Only `CONGINE_BASE_URL` chooses a control plane. Setting `region` *without* `base_url` raises rather than silently falling back to loopback. |
-| `validation_timeout_ms` | `CONGINE_TIMEOUT_MS` | `100` | Hard ceiling per validation. The pure rule engine runs in <1ms; the budget covers semantic validation. |
+| `validation_timeout_ms` | `CONGINE_TIMEOUT_MS` | `100` | **Aggregate governed validation deadline budget** covering orchestration, queue wait, native evaluation and semantic evaluation. Not a hard wall-clock ceiling and not a worker cancellation deadline: the caller stops waiting once exhaustion is observable, but already-running thread work is not force-cancelled. The guarantee is that a result completing after its deadline is never returned as enforced. |
+| `native_validation_timeout_ms` | `CONGINE_NATIVE_TIMEOUT_MS` | `None` | Optional cap on the native stage. `None` inherits whatever aggregate budget remains when the stage starts. Must be `> 0` and `<= validation_timeout_ms`. |
+| `semantic_validation_timeout_ms` | `CONGINE_SEMANTIC_TIMEOUT_MS` | `None` | Optional cap on the semantic stage. Same rules as the native cap. Exceeding it yields `degraded_reason="semantic_timeout"`, distinct from a native timeout and from a load shed. |
 | `fail_mode` | `CONGINE_FAIL_MODE` | `degrade` | `strict` \| `degrade` \| `silent`. See **Failure modes**. |
 | `cache_capacity` | `CONGINE_CACHE_CAPACITY` | `500` | O(1) LFU cache max entries. `0` disables caching entirely. |
 | `cache_ttl_seconds` | `CONGINE_CACHE_TTL` | `300` | Default TTL per cached schema; also the TTL the sync use case applies on each `put`. |

@@ -13,6 +13,7 @@ from congine_core.domain.contract_admission import (
 from congine_core.models import (
     BreachDetail,
     DegradedReason,
+    EvaluationStage,
     DriftResult,
     TelemetryEvent,
     ValidationResult,
@@ -29,6 +30,7 @@ __all__ = [
     "BreachDetail",
     "ValidationResult",
     "DegradedReason",
+    "EvaluationStage",
     "DriftResult",
     "TelemetryEvent",
     "RuleEngine",

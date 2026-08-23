@@ -17,6 +17,7 @@ from __future__ import annotations
 from congine_core.models import (
     BreachDetail,
     DegradedReason,
+    EvaluationStage,
     DriftResult,
     TelemetryEvent,
     ValidationResult,
@@ -25,6 +26,7 @@ from congine_core.models import (
 __all__ = [
     "BreachDetail",
     "DegradedReason",
+    "EvaluationStage",
     "DriftResult",
     "TelemetryEvent",
     "ValidationResult",
