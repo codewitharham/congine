@@ -8,7 +8,7 @@
 | **Branch** | `P1_CLOSED_PHASE1` |
 | **P0 parent** | `1258a982b7dca2caac38de07256a8339575edbf6` |
 | **Repository HEAD at reconciliation** | `7fd9f0d8d70fd3ade4eb76514b6077d55110eba6` — `b482bc4` plus one founder commit deleting three user-owned SDK audit files; **no source, test or configuration change** |
-| **Verification status** | **P0 CLOSED · P1 CLOSED · P1.5 NEXT** · P2 / P3 / Phase A–F NOT STARTED |
+| **Verification status** | **P0 CLOSED · P1 CLOSED · P1.5 CLOSED** · P2 / P3 / Phase A–F NOT STARTED |
 | **Reconciled** | 2026-08-22 |
 
 **Package root:** `libs/congine-sdk/src/congine_core/` — **40 Python files** across six layers
@@ -3440,7 +3440,7 @@ lose events silently apart from the `dropped_total` counter.
 | G2 | No boot stall | breaker gate + inline snapshot fallback | `test_remediations.py:201,238,261`; `test_circuit_breaker.py` (11) | **HOLDS** |
 | G3 | No thundering herd | jitter + non-blocking `portalocker` boot lock | `test_single_flight_boot.py` (3) | **HOLDS** (per host; boot only) |
 | G4 | Snapshot integrity | scoped path, per-user dir, atomic write, cross-process lock, load-time refusal | `test_host_bypass.py` (5); `test_repository.py` (14) | **HOLDS** (POSIX) / **AT RISK** (Windows ownership check is a no-op) |
-| G5 | No ReDoS | `re2` core dep + length caps + pattern cache | `test_redos.py` (5) | **HOLDS** — the former `pii_sanitize` stdlib-`re` exception is **closed**; the sanitizer is RE2-only |
+| G5 | No ReDoS | `re2` core dep + length caps + pattern cache | `test_redos.py` (5) | **HOLDS** — the former `pii_sanitize` stdlib-`re` exception is **closed**; the sanitizer is RE2-only. **P1.5 strengthened:** semantic regex evaluation is rebound to RE2 (`_re2_validator_class`), so schema-supplied patterns cannot reach the backtracking engine on the semantic path either |
 | G6 | Multi-tenant isolation | `get_default()` disabled, scoped snapshots, per-tenant containers, safe eviction | `test_tenant_isolation.py` (2); `test_container_tenant_lru.py` (7) | **HOLDS** — prior asterisk resolved |
 | G7 | PII-safe telemetry | breach sanitisation ×2 + logger blocklist + auto-allowlist | `test_pii_sanitization.py` (3); `test_logger.py` (5) | **HOLDS** |
 | G8 | Failed sync never clears the cache | early return + in-place `put` | `test_sync_usecase.py:57,46,84` | **HOLDS** *(newly documented)* |
@@ -3453,11 +3453,11 @@ further invariants sit above them, added by P0 and P1 and detailed in §14.10:
 
 | # | Category | Guarantee | Mechanism | Test | Status |
 |---|---|---|---|---|---|
-| G12 | **epistemic** — policy activation truth | An uninterpretable contract never becomes active policy | `domain/contract_admission.py` | `test_contract_admission.py` | **HOLDS** *(except the D-ADM bypass)* |
-| G13 | **epistemic** — configuration truth | Configuration is construction-path independent | `config.py` `__post_init__` → normalize → validate | `test_config_construction_parity.py` | **HOLDS** |
-| G14 | **epistemic** — evaluation/enforcement truth | No silent non-enforcement | `is_enforced()` + `DegradedReason` | `test_p0_result_semantics.py` | **HOLDS** |
-| G15 | **structural** — layer matrix | The layer matrix is mechanically enforced | `tools/check_architecture.py` | `tests/architecture/` (90) | **HOLDS** |
-| G16 | **structural / lifecycle** | Transactional composition + terminal close | `ServiceContainer` | `test_p1_lifecycle.py` | **HOLDS** |
+| G12 | **epistemic** — policy activation truth | An uninterpretable contract never becomes active policy | `domain/contract_admission.py` + `semantic_capability.py` | `test_contract_admission.py`; `test_p1_5_semantic_safety.py` | **HOLDS** *(except the D-ADM bypass)* — **P1.5 strengthened:** admission is capability-aware, deriving `SemanticCapability` from the concrete wired evaluator instead of a static keyword list (which over-claimed 11 keywords on draft4, 6 on draft6, 5 on draft7, 1 on 2019-09). **The D-ADM `schema_storage.put()` bypass remains unresolved and deferred** |
+| G13 | **epistemic** — configuration truth | Configuration is construction-path independent | `config.py` `__post_init__` → normalize → validate | `test_config_construction_parity.py` | **HOLDS** — **P1.5 preserved:** the two stage-budget fields validate in `__post_init__`, not `validate()`, so both construction paths still converge |
+| G14 | **epistemic** — evaluation/enforcement truth | No silent non-enforcement | `is_enforced()` + `DegradedReason` + `EvaluationStage` | `test_p0_result_semantics.py`; `test_p1_5_stage_budgets.py` | **HOLDS** — **P1.5 strengthened:** `SEMANTIC_TIMEOUT` and `EvaluationStage` make a semantic overrun distinguishable from a native one, and a result completing after its applicable logical deadline cannot be returned as enforced |
+| G15 | **structural** — layer matrix | The layer matrix is mechanically enforced | `tools/check_architecture.py` | `tests/architecture/` (90) | **HOLDS** — **P1.5 preserved:** allowlist 0, TYPE_CHECKING exemptions 0, now 42 source files |
+| G16 | **structural / lifecycle** | Transactional composition + terminal close | `ServiceContainer` | `test_p1_lifecycle.py` | **HOLDS** — **P1.5 preserved:** the semantic preparation cache belongs to the evaluator, has no background thread and no executor, and requires no `close()` change |
 
 **Net: sixteen invariants, all holding — G1–G11 mechanical/runtime, G12–G14 epistemic/trust,
 G15–G16 structural. One is weaker on Windows than on POSIX.** None is broken. The G5 sanitizer
@@ -3630,7 +3630,7 @@ live in L0 (§3.1), so such a change is an L0 change. The conclusion is unaffect
 |---|---|---|
 | **P0** | Trust-critical hardening | **CLOSED** |
 | **P1** | Structural / mechanical hardening | **CLOSED** |
-| **P1.5** | **Semantic validation safety** — P1.5-01 honest semantic-validation cost communication · P1.5-02 separate native/semantic budget policy · P1.5-03 complexity/admission prototype · P1.5-04 compiled-validator caching investigation | **NEXT** |
+| **P1.5** | **Semantic validation safety** — P1.5-01 honest semantic-validation cost communication · P1.5-02 separate native/semantic budget policy · P1.5-03 complexity/admission prototype · P1.5-04 compiled-validator caching investigation | **CLOSED** — see `_suite/hardening/P1_5_COMPLETION_REPORT.md`. P1.5-03 closed as a **negative** result (no hard complexity admission justified); P1.5-04 shipped as a `check_schema`-preparation cache, **not** validator reuse |
 | **P2** | Verification / release gates — Python support matrix · Linux release CI · golden determinism corpus · branch coverage · pip-audit · SBOM · security gates · reproducible performance evidence | NOT STARTED |
 | **P3** | Formal documentation + ADR reconciliation — D1 · D2 · D3 · F01–F09 · ADR stabilization | NOT STARTED |
 | **Post-P3 / downstream web surfaces** | **W1** documentation site · **W2** prototype control-plane site — they *depend on* the reconciled documentation and do **not** define P3 completion | NOT STARTED |
