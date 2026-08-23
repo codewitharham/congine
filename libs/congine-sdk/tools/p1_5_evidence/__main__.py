@@ -18,6 +18,7 @@ from typing import List
 from tools.p1_5_evidence import (
     benchmark,
     capability,
+    complexity,
     deadline_fidelity,
     policy_truth,
 )
@@ -148,6 +149,53 @@ def _capability(as_json: bool, live_server: bool = False) -> int:
     return 1 if failures else 0
 
 
+def _complexity(args: List[str], as_json: bool) -> int:
+    """Slice-E complexity experiment.
+
+    ``--worker`` is the fresh-process measurement half; it prints one run record
+    on stdout and is spawned by the driver rather than run by hand. ``--scale``
+    reports the deterministic size of the experiment without measuring anything,
+    and ``--pilot`` runs a single cut-down process purely to estimate runtime —
+    pilot timings are marked ``evidence: false`` and never enter the analysis.
+    """
+    run_index = 0
+    for arg in args:
+        if arg.startswith("--run-index="):
+            run_index = int(arg.split("=", 1)[1])
+
+    if "--scale" in args:
+        print(json.dumps(complexity.corpus_scale(), indent=1, sort_keys=True))
+        return 0
+    if "--worker" in args:
+        record = complexity.measure_run(run_index, pilot="--pilot" in args)
+        print(json.dumps(record, sort_keys=True))
+        return 0
+    if "--pilot" in args:
+        record = complexity.spawn(0, pilot=True)
+        print(
+            json.dumps(record, indent=1, sort_keys=True)
+            if as_json
+            else _pilot_summary(record)
+        )
+        return 0
+
+    record = complexity.run_experiment()
+    if as_json:
+        print(json.dumps(record, indent=1, sort_keys=True))
+    else:
+        print(complexity.render(record))
+    return 0
+
+
+def _pilot_summary(record: dict) -> str:
+    contexts = record["contexts"]
+    return (
+        f"PILOT (evidence={record['evidence']}) — {len(contexts)} measurement contexts, "
+        f"corpus {record['corpus_hash'][:12]} v{record['corpus_version']}\n"
+        "Pilot timings are excluded from every Slice-E conclusion."
+    )
+
+
 def main(argv: List[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     as_json = "--json" in args
@@ -167,6 +215,8 @@ def main(argv: List[str] | None = None) -> int:
         # Observational: a blocking result is reported, not raised, so the
         # founder decision stays explicit rather than implied by an exit code.
         return 0
+    if mode == "complexity":
+        return _complexity(args, as_json)
     if mode == "all":
         rc = _capability(as_json, live_server="--live-server" in args)
         print()
