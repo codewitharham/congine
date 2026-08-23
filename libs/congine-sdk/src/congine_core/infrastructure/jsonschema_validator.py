@@ -27,6 +27,11 @@ from referencing.exceptions import NoSuchResource
 
 from congine_core.models import BreachDetail
 from congine_core.exceptions import CongineConfigurationError
+from congine_core.infrastructure.schema_preparation_cache import (
+    SchemaPreparationCache,
+    prepare_identity,
+    preparation_key,
+)
 from congine_core.pii_sanitize import sanitize_breach_message
 from congine_core.security_limits import (
     DEFAULT_SEMANTIC_MAX_BREACHES,
@@ -335,31 +340,74 @@ class JsonSchemaSemanticValidator:
         self.capability: SemanticCapability = derive_capability(
             base_cls, format_checking=format_checking
         )
+        #: Remembers that ``check_schema`` already succeeded for a given schema
+        #: content under this exact evaluator context (P1.5 Slice F). Owned by this
+        #: instance, so independently configured containers never share markers.
+        self._preparation_cache = SchemaPreparationCache()
 
     def validate(
         self, payload: dict[str, Any], schema: dict[str, Any]
     ) -> List[BreachDetail]:
-        """Return a :class:`BreachDetail` for every JSON Schema violation."""
-        pattern_breaches = self._check_schema_patterns(schema)
+        """Return a :class:`BreachDetail` for every JSON Schema violation.
+
+        ``check_schema`` is the expensive half of semantic evaluation — measured at
+        8-105 ms against 0.01-0.02 ms for constructing the validator — and it is
+        deterministic for fixed schema content and a fixed validator class. It is
+        therefore run once per (content, evaluator context) and remembered
+        (P1.5 Slice F).
+
+        **The cache changes exactly one operation.** A confirmed
+        :data:`CHECK_SCHEMA_VALID` marker skips ``check_schema`` and nothing else:
+        the pattern guard still runs first and on every call, a *fresh* validator is
+        still constructed for every evaluation, the no-retrieval registry is still
+        applied, and ``iter_errors`` is still the evaluation. No prepared validator
+        is ever stored or shared — it carries mutable state, and lending one across
+        requests would trade a latency problem for a correctness one.
+
+        Evaluation works from an **owned snapshot**, so the content that was
+        identified is provably the content that is judged, and a caller mutating its
+        own dict afterwards cannot make a marker authorise different content. A
+        schema that cannot be safely owned (non-finite floats, non-string keys,
+        exotic containers, cycles) simply takes the uncached path with unchanged
+        semantics — the optimization has no say in whether a contract is valid.
+        """
+        snapshot, digest = prepare_identity(schema)
+
+        pattern_breaches = self._check_schema_patterns(snapshot)
         if pattern_breaches:
             return pattern_breaches
 
-        try:
-            self._validator_cls.check_schema(schema)
-        except SchemaError as exc:
-            return [
-                BreachDetail(
-                    rule="SEMANTIC_SCHEMA",
-                    field="<schema>",
-                    message=sanitize_breach_message(f"Invalid schema: {exc.message}"),
-                )
-            ]
+        key = (
+            None
+            if digest is None
+            else preparation_key(digest, self._validator_cls, self._format_checking)
+        )
+        if key is None or not self._preparation_cache.is_prepared(key):
+            try:
+                self._validator_cls.check_schema(snapshot)
+            except SchemaError as exc:
+                return [
+                    BreachDetail(
+                        rule="SEMANTIC_SCHEMA",
+                        field="<schema>",
+                        message=sanitize_breach_message(
+                            f"Invalid schema: {exc.message}"
+                        ),
+                    )
+                ]
+            if key is not None:
+                # Recorded only after a genuine success, so the cache stays strictly
+                # positive. A worker whose governed caller has already timed out may
+                # still land here; that is permitted because the marker carries
+                # preparation truth for a schema and no payload or result truth
+                # whatsoever, and final-result ownership stays with the use case.
+                self._preparation_cache.mark_prepared(key)
 
         format_checker = None
         if self._format_checking:
             format_checker = getattr(self._validator_cls, "FORMAT_CHECKER", None)
         validator = self._validator_cls(
-            schema, format_checker=format_checker, registry=self._registry
+            snapshot, format_checker=format_checker, registry=self._registry
         )
         breaches: List[BreachDetail] = []
         truncated = False

@@ -21,6 +21,7 @@ from tools.p1_5_evidence import (
     complexity,
     deadline_fidelity,
     policy_truth,
+    preparation_cache,
 )
 
 #: Capabilities admission currently advertises as enforced. A silent pass here
@@ -187,6 +188,59 @@ def _complexity(args: List[str], as_json: bool) -> int:
     return 0
 
 
+def _prepcache(args: List[str], as_json: bool) -> int:
+    """Slice-F preparation-cache experiment (A current / B unsafe / C safe).
+
+    Same shape as ``complexity``: ``--scale`` sizes the experiment without
+    measuring, ``--worker`` is the fresh-process half, ``--pilot`` estimates
+    runtime and is marked ``evidence: false``.
+    """
+    run_index = 0
+    for arg in args:
+        if arg.startswith("--run-index="):
+            run_index = int(arg.split("=", 1)[1])
+
+    production = "--production" in args
+
+    if "--scale" in args:
+        print(json.dumps(preparation_cache.corpus_scale(), indent=1, sort_keys=True))
+        return 0
+    if "--worker" in args:
+        record = (
+            preparation_cache.production_run(run_index, pilot="--pilot" in args)
+            if production
+            else preparation_cache.measure_run(run_index, pilot="--pilot" in args)
+        )
+        print(json.dumps(record, sort_keys=True))
+        return 0
+    if production:
+        record = preparation_cache.production_experiment()
+        if as_json:
+            print(json.dumps(record, indent=1, sort_keys=True))
+        else:
+            print(preparation_cache.render_production(record))
+        return 0
+    if "--pilot" in args:
+        record = preparation_cache.spawn(0, pilot=True)
+        print(
+            json.dumps(record, indent=1, sort_keys=True)
+            if as_json
+            else (
+                f"PILOT (evidence={record['evidence']}) — "
+                f"{len(record['contexts'])} union contexts\n"
+                "Pilot timings are excluded from every Slice-F conclusion."
+            )
+        )
+        return 0
+
+    record = preparation_cache.run_experiment()
+    if as_json:
+        print(json.dumps(record, indent=1, sort_keys=True))
+    else:
+        print(preparation_cache.render(record))
+    return 0
+
+
 def _pilot_summary(record: dict) -> str:
     contexts = record["contexts"]
     return (
@@ -217,6 +271,8 @@ def main(argv: List[str] | None = None) -> int:
         return 0
     if mode == "complexity":
         return _complexity(args, as_json)
+    if mode == "prepcache":
+        return _prepcache(args, as_json)
     if mode == "all":
         rc = _capability(as_json, live_server="--live-server" in args)
         print()
