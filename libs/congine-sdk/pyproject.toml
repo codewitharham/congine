@@ -15,7 +15,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -29,6 +28,16 @@ dependencies = [
     "httpx>=0.28",
     "jsonschema>=4.23",
     "portalocker>=2.8",
+    # Direct, not incidental. CONGINE constructs an explicit no-retrieval
+    # `Registry` so semantic evaluation can never fetch an external `$ref`:
+    # left to itself the library performs a real network request and lets the
+    # remote document decide enforcement (P1.5-A0-2). `jsonschema` does not
+    # re-export `Registry`, so the supported API is only reachable by importing
+    # `referencing` directly. It is already in the graph transitively via
+    # `jsonschema`; the floor matches jsonschema's own (`>=0.28.4`), verified by
+    # installing that exact version and confirming both `Registry(retrieve=...)`
+    # and `NoSuchResource(ref=...)` exist there.
+    "referencing>=0.28.4",
 ]
 
 [project.urls]
@@ -50,10 +59,12 @@ redos = ["google-re2>=1.0"]
 # Development / test toolchain. NOT shipped to runtime consumers; install with
 # `pip install congine-sdk[dev]` (or `uv sync --extra dev`).
 dev = [
+    "mypy>=1.18.2",
     "pytest>=8.0",
     "pytest-asyncio>=1.0",
     "pytest-cov>=6.0",
     "ruff>=0.15.15",
+    "types-jsonschema>=4.23",
 ]
 
 [tool.uv]
@@ -63,11 +74,25 @@ package = true
 
 
 [tool.ruff]
-# Pin the target version to the supported floor so format/check do not rewrite
-# Python 3.14-only syntax (e.g. PEP 758 unparenthesised `except A, B:`) that
-# would break collection on 3.10–3.13 — the declared `requires-python` floor.
-target-version = "py310"
+# Pin the target version to the supported floor (`requires-python = ">=3.11"`)
+# so format/check do not rewrite newer-only syntax (e.g. PEP 758 unparenthesised
+# `except A, B:`) that would break collection on 3.11-3.13.
+#
+# The floor is 3.11 in exactly four places and they must agree (audit Q6):
+# `requires-python` above, the classifiers above, this target-version, and the
+# CI matrix. They previously disagreed four ways.
+target-version = "py311"
 extend-exclude = ["src/congine_sdk.egg-info"]
+
+[tool.mypy]
+# Static enforcement covers production source only. Tests and examples exercise
+# intentionally dynamic integration seams and are checked by their runtime suites.
+files = ["src/congine_core"]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+show_error_codes = true
+pretty = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

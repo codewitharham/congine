@@ -14,7 +14,7 @@ import os
 import pytest
 
 from congine_core.adapters.dependency_injection import ServiceContainer
-from congine_core.config import CongineConfig, Region
+from congine_core.config import CongineConfig, ContractSource, Region
 from congine_core.infrastructure.file_contract_repository import (
     FileContractRepository,
 )
@@ -103,7 +103,7 @@ def test_load_snapshot_returns_none(tmp_path) -> None:
 
 
 def test_container_wires_file_repo_when_source_is_file(tmp_path) -> None:
-    cfg = _config(contract_source="file", contracts_dir=str(tmp_path))
+    cfg = _config(contract_source=ContractSource.FILE, contracts_dir=str(tmp_path))
     container = ServiceContainer(cfg)
     try:
         assert isinstance(container.contract_repository, FileContractRepository)
@@ -128,7 +128,7 @@ def test_file_repo_round_trips_via_bootstrap(tmp_path) -> None:
     (tmp_path / "c.json").write_text(
         json.dumps({"id": "c", "schema": {"type": "object"}})
     )
-    cfg = _config(contract_source="file", contracts_dir=str(tmp_path))
+    cfg = _config(contract_source=ContractSource.FILE, contracts_dir=str(tmp_path))
     container = ServiceContainer(cfg)
     try:
         loaded = container.bootstrap()

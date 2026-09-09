@@ -22,7 +22,7 @@ import math
 from collections import deque
 from typing import Any, Iterable, Sequence
 
-from congine_core.domain.models import DriftResult
+from congine_core.models import DriftResult
 
 #: Default strict upper bound on the reference window size.
 DEFAULT_MAX_SAMPLES = 500

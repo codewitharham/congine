@@ -152,12 +152,21 @@ def test_standalone_local_contracts_dir_binds_file_repo_and_no_sync_worker(
 def test_jsonschema_draft_env_selects_validator_class(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CONGINE_JSONSCHEMA_DRAFT must pick the matching jsonschema validator class."""
+    """CONGINE_JSONSCHEMA_DRAFT must pick the matching jsonschema validator class.
+
+    Since P1.5 the wired class is an RE2-extended class built by
+    ``jsonschema.validators.extend``, which is *not* a subclass of the draft
+    class. The invariant this test protects is unchanged and still asserted:
+    the configured dialect selects the right base validator. It is checked via
+    the retained base class, with the derived capability confirming the dialect
+    independently.
+    """
     _baseline_env(monkeypatch, CONGINE_JSONSCHEMA_DRAFT="draft7")
 
     container = ServiceContainer.from_env()
     try:
-        assert container.semantic_validator._validator_cls is Draft7Validator
+        assert container.semantic_validator._base_validator_cls is Draft7Validator
+        assert container.semantic_validator.capability.draft == "draft7"
     finally:
         container.close()
 
@@ -165,12 +174,17 @@ def test_jsonschema_draft_env_selects_validator_class(
 def test_jsonschema_draft_defaults_to_2020_12(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Absent the env var, the validator defaults to Draft 2020-12."""
+    """Absent the env var, the validator defaults to Draft 2020-12.
+
+    Asserted through subclass-ness and the derived capability, for the reason
+    given in the test above.
+    """
     _baseline_env(monkeypatch)
 
     container = ServiceContainer.from_env()
     try:
-        assert container.semantic_validator._validator_cls is Draft202012Validator
+        assert container.semantic_validator._base_validator_cls is Draft202012Validator
+        assert container.semantic_validator.capability.draft == "draft202012"
     finally:
         container.close()
 
@@ -280,3 +294,33 @@ def test_snapshot_lock_timeout_propagates_to_portalocker(
     repo.save_snapshot([{"id": "c1", "schema": {"type": "object"}}])
 
     assert captured["timeout"] == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# 7. Semantic-validation flag reaches the sync use case (audit P0-2)
+# --------------------------------------------------------------------------- #
+def test_semantic_validation_flag_reaches_sync_usecase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sync use case needs the active evaluator set for admission."""
+    _baseline_env(monkeypatch, CONGINE_SEMANTIC_VALIDATION="true")
+
+    container = ServiceContainer.from_env()
+    try:
+        assert container.config.semantic_validation_enabled is True
+        assert container.sync_contracts_usecase.semantic_validation_enabled is True
+    finally:
+        container.close()
+
+
+def test_semantic_validation_defaults_false_in_sync_usecase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent the env var, admission judges only native evaluator capabilities."""
+    _baseline_env(monkeypatch)
+
+    container = ServiceContainer.from_env()
+    try:
+        assert container.sync_contracts_usecase.semantic_validation_enabled is False
+    finally:
+        container.close()

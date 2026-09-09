@@ -1,9 +1,9 @@
 # LangChain × congine-sdk — worked example
 
-A runnable agent that uses **deepagents + Google Gemini** for the LLM work and
-**congine-sdk** as a *hot-path guard* on the model's output. It demonstrates the
-SDK's two entry points side by side and shows both a **passing** validation and a
-**blocked breach**.
+A runnable return-processing agent that uses **Google Gemini** when configured
+and a deterministic local fallback otherwise. **congine-sdk** guards the
+structured return decision and validates a streamed support reply before either
+result reaches downstream code.
 
 > `congine-sdk` validates an LLM/agent's output against a versioned contract and
 > degrades/blocks/heals it **before** the payload reaches your business logic.
@@ -12,11 +12,11 @@ SDK's two entry points side by side and shows both a **passing** validation and 
 
 ## What it shows
 
-| # | Entry point | File ref | Pass case | Breach case |
-|---|-------------|----------|-----------|-------------|
-| A | `@congine_guard` decorator | [`agent.py`](agent.py) `extract_weather` / `process_return` | weather dict validates | `confidence_score=1.5` → `RANGE_CHECK`, guard raises `CongineValidationError` |
-| B | `CongineCallbackHandler` | [`agent.py`](agent.py) `demo_callback_handler` | streamed reply validates | empty completion → `minLength` breach |
-| C | live deepagents + Gemini | [`agent.py`](agent.py) `demo_live_agent` | agent runs, output guarded | (optional; needs a real key) |
+| # | Entry point | File ref | Demonstrated behavior |
+|---|-------------|----------|-----------------------|
+| A | `@congine_guard` decorator | [`agent.py`](agent.py) `process_untrusted_customer_ticket` | validates normal and adversarial-prompt return decisions against `customer.support.return_processing` |
+| B | `CongineCallbackHandler` | [`agent.py`](agent.py) `run_real_world_scenarios` | joins five streamed tokens and validates the reply against `support.reply.text` |
+| C | offline CI runner | [`smoke.py`](smoke.py) | clears the Google key, disables remote services, executes the guarded fallback, and asserts the contract-valid `escalate` decision |
 
 ---
 
@@ -24,34 +24,30 @@ SDK's two entry points side by side and shows both a **passing** validation and 
 
 - The repo is a **uv workspace**; this example is already a member
   (`libs/congine-sdk/examples/LangChain` in the root `pyproject.toml`).
-- A Google Gemini API key **only** for the live agent (section C). Sections A and
-  B run fully offline.
+- A Google Gemini API key is optional. Without one, both structured scenarios
+  use the contract-valid local `escalate` fallback; the streamed reply is always
+  local.
 
 ## Setup & run
 
 From the **workspace root** (`congine_workspace/`):
 
 ```bash
-uv sync                                   # installs deepagents, langchain-google-genai, the SDK, …
+uv sync                                   # installs LangChain, the Gemini provider, the SDK, …
 # put a real key in libs/congine-sdk/examples/LangChain/.env  ->  GOOGLE_API_KEY=...
 uv run --package congine-langchain-example python libs/congine-sdk/examples/LangChain/agent.py
 ```
 
-### Expected output (abridged)
+For the deterministic offline CI path (no API key, telemetry, or network), run:
+
+```bash
+uv run --package congine-langchain-example python libs/congine-sdk/examples/LangChain/smoke.py
+```
+
+### Expected offline smoke output
 
 ```
-[bootstrap] loaded 3 contract(s) from ...\contracts
-=== A. @congine_guard (structured output) ===
-[pass] extract_weather('Paris')
-   is_pass()  : True  (status=pass, 0.1x ms)
-[breach] process_return('TKT-0001') -> expect a block
-   blocked by guard: Contract customer.support.return_processing validation failed
-      - [RANGE_CHECK] field='confidence_score': Value for 'confidence_score' is above maximum 1.0
-=== B. CongineCallbackHandler (streamed text) ===
-[pass] ... -> is_pass()=True
-[breach] empty completion -> is_pass()=False
-      - [<semantic>] field='text': ... shorter than 1 ...
-[shutdown] container closed.
+LangChain example smoke passed (offline fallback validated).
 ```
 
 ---
@@ -78,10 +74,15 @@ bounded validation pool. Build it once, `bootstrap()` to prime the schema cache
 `container=` explicitly to the guard and the handler rather than relying on the
 process-wide default.
 
+`close()` is terminal and idempotent. Reusing the container through a guard or
+callback after shutdown raises `CongineLifecycleError`; create and bootstrap a
+new container instead. Process-wide and tenant registries likewise replace a
+closed cached instance rather than returning it.
+
 ### 3. Decorator vs. callback handler — pick by output shape
 - **`@congine_guard`** → use when your function returns **structured output** (a
   dict / multi-field object). It validates the whole dict against the contract.
-  Best fit for the weather and return contracts.
+  This is what protects `process_untrusted_customer_ticket`.
 - **`CongineCallbackHandler`** → use for **streamed free text**. It joins the
   tokens and validates `{"text": <completion>}` — a **single field**. That is why
   it needs a *text-shaped* contract (`support.reply.text`); pointing it at a
@@ -91,14 +92,20 @@ process-wide default.
 Enforcement happens at two layers:
 - **`CONGINE_FAIL_MODE`** governs the *use case*: `degrade` makes it **return** a
   failed `ValidationResult` (so the callback handler can read `.breaches`);
-  `strict` would make it **raise** (and the handler would swallow that, leaving
-  `last_result = None`).
+  `strict` makes it **raise**, and the callback handler propagates every
+  `CongineBaseException` so policy failures cannot be neutralised by the
+  integration surface.
 - **guard `mode`** governs the *decorator*: `mode="raise"` blocks on a breach;
   `"envelope"` returns `{"output", "validation_result"}`; `"output"` returns the
   raw value.
 
-We use `degrade` globally and `mode="raise"` on `process_return`, so the
-decorator blocks **and** the handler can surface breach details.
+We use `degrade` globally and `mode="raise"` on
+`process_untrusted_customer_ticket`, so the decorator blocks a failed result
+while the callback handler can expose a failed result for inspection.
+
+Unexpected non-SDK callback failures are still logged and contained, returning
+`None`. The handler publishes `last_result` and its per-run result history under
+one lock, so concurrent LangChain callback threads observe a consistent state.
 
 ### 5. Semantic validation is ON for full JSON Schema
 The pure `RuleEngine` covers `required` / `type` / `enum` / **range**
@@ -121,7 +128,7 @@ absolute one so it runs from any cwd.
 
 | Var | Value here | Why |
 |-----|-----------|-----|
-| `GOOGLE_API_KEY` | *(your key)* | Gemini; only the live agent (C) needs it |
+| `GOOGLE_API_KEY` | *(your key)* | Enables the optional live Gemini path in `agent.py`; leave empty for the fallback |
 | `CONGINE_BASE_URL` | `http://localhost:8080` | loopback ⇒ offline, no credential enforcement |
 | `CONGINE_FAIL_MODE` | `degrade` | use case returns failed results (see §4) |
 | `CONGINE_SEMANTIC_VALIDATION` | `true` | enable `minLength`/`maxLength`/full JSON Schema (§5) |

@@ -29,6 +29,7 @@ def _config(fail_mode: FailMode = FailMode.DEGRADE) -> CongineConfig:
         project_id="p",
         tenant_id="t",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         validation_timeout_ms=200,
         fail_mode=fail_mode,
         cache_capacity=10,
@@ -185,6 +186,7 @@ def test_bootstrap_starts_background_worker_when_enabled() -> None:
         project_id="p",
         tenant_id="t",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         sync_enabled=True,
         sync_interval_seconds=300,
     )
@@ -215,6 +217,7 @@ def test_semantic_validation_enabled_uses_composite() -> None:
         project_id="p",
         tenant_id="t",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         semantic_validation_enabled=True,
     )
     container = ServiceContainer(cfg)

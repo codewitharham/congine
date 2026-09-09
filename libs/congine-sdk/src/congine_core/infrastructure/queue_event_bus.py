@@ -17,6 +17,7 @@ dropped. The worker is a daemon — it never blocks interpreter exit — but an
 from __future__ import annotations
 
 import atexit
+import contextlib
 import queue
 import threading
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
@@ -24,14 +25,16 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 import httpx
 
 from congine_core.config import CongineConfig
+from congine_core.exceptions import CongineLifecycleError
 from congine_core.ports.logger import ILogger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.domain.models import TelemetryEvent
+    from congine_core.models import TelemetryEvent
     from congine_core.ports.circuit_breaker import ICircuitBreaker
 
 #: Default control-plane path for telemetry ingestion.
 _TELEMETRY_PATH = "/api/v1/telemetry"
+_WORKER_JOIN_TIMEOUT_SECONDS = 2.0
 
 
 class QueueEventBus:
@@ -74,8 +77,15 @@ class QueueEventBus:
         self._backoff_max = backoff_max
         self._client_factory = client_factory or (lambda: httpx.Client(timeout=10.0))
         self._client: Optional[httpx.Client] = None
+        self._ship_lock = threading.RLock()
         self._stop_event = threading.Event()
         self._daemon: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.Lock()
+        self._closed = False
+        self._shutdown_complete = threading.Event()
+        self._drain_requested = False
+        self._final_attempts: Optional[int] = None
+        self._atexit_callback: Optional[Callable[[], None]] = None
         self._circuit_breaker = circuit_breaker
         # Cumulative count of telemetry events lost (audit D-10): queue-full on
         # publish + batch-drop after retries. Exposed via :meth:`dropped_total`
@@ -85,13 +95,7 @@ class QueueEventBus:
         self._dropped_lock = threading.Lock()
 
         if start_worker:
-            self._daemon = threading.Thread(
-                target=self._drain_loop,
-                name="congine_event_bus",
-                daemon=True,
-            )
-            self._daemon.start()
-            atexit.register(self._drain_on_exit)
+            self.start()
 
     # ------------------------------------------------------------------ #
     # Public API (IEventBus)
@@ -102,18 +106,61 @@ class QueueEventBus:
         Args:
             event: The telemetry event to publish.
         """
-        try:
-            self._queue.put_nowait(event)
-        except queue.Full:
-            with self._dropped_lock:
-                self._dropped_total += 1
-                dropped = self._dropped_total
-            if self._logger:
-                self._logger.warning(
-                    "Event queue full, dropping event",
-                    contract_id=getattr(event, "contract_id", None),
-                    dropped_total=dropped,
+        with self._lifecycle_lock:
+            accepting = not self._closed
+            if accepting:
+                try:
+                    self._queue.put_nowait(event)
+                    return
+                except queue.Full:
+                    pass
+        if not accepting:
+            message = "Event bus closed, dropping event"
+        else:
+            message = "Event queue full, dropping event"
+        with self._dropped_lock:
+            self._dropped_total += 1
+            dropped = self._dropped_total
+        if self._logger:
+            self._logger.warning(
+                message,
+                contract_id=getattr(event, "contract_id", None),
+                dropped_total=dropped,
+            )
+
+    def start(self) -> None:
+        """Start the drain worker once; a stopped bus cannot restart."""
+        with self._lifecycle_lock:
+            if self._closed:
+                raise CongineLifecycleError(
+                    "QueueEventBus is closed and cannot accept new work"
                 )
+            if self._daemon is not None and self._daemon.is_alive():
+                return
+            self._stop_event.clear()
+            daemon = threading.Thread(
+                target=self._drain_loop,
+                name="congine_event_bus",
+                daemon=True,
+            )
+            callback = self._drain_on_exit
+            atexit.register(callback)
+            self._atexit_callback = callback
+            self._daemon = daemon
+            try:
+                daemon.start()
+            except BaseException:
+                self._daemon = None
+                self._atexit_callback = None
+                with contextlib.suppress(Exception):
+                    atexit.unregister(callback)
+                raise
+
+    @property
+    def closed(self) -> bool:
+        """Whether the bus has entered terminal shutdown."""
+        with self._lifecycle_lock:
+            return self._closed
 
     def queue_depth(self) -> int:
         """Approximate number of telemetry events currently buffered."""
@@ -130,15 +177,53 @@ class QueueEventBus:
         Args:
             drain: When ``True`` ship whatever is still queued before stopping.
         """
-        self._stop_event.set()
-        if drain:
-            self._flush_remaining()
-        daemon = self._daemon
-        if daemon is not None and daemon.is_alive():
-            daemon.join(timeout=2.0)
-        if self._client is not None:
-            self._client.close()
-            self._client = None
+        self._stop(drain=drain, max_attempts=None)
+
+    def _stop(self, *, drain: bool, max_attempts: Optional[int]) -> None:
+        start_finisher = False
+        with self._lifecycle_lock:
+            first_stop = not self._closed
+            self._closed = True
+            self._drain_requested = self._drain_requested or drain
+            if max_attempts is not None:
+                current = self._final_attempts
+                self._final_attempts = (
+                    max_attempts if current is None else min(current, max_attempts)
+                )
+            self._stop_event.set()
+            daemon = self._daemon
+            if daemon is None and first_stop:
+                daemon = threading.Thread(
+                    target=self._finish_without_worker,
+                    name="congine_event_bus_shutdown",
+                    daemon=True,
+                )
+                self._daemon = daemon
+                start_finisher = True
+            callback = self._atexit_callback
+            self._atexit_callback = None
+
+        if callback is not None:
+            with contextlib.suppress(Exception):
+                atexit.unregister(callback)
+
+        if daemon is None:
+            return
+
+        if start_finisher:
+            try:
+                daemon.start()
+            except BaseException as exc:  # stop() is a no-raise boundary
+                self._shutdown_complete.set()
+                if self._logger:
+                    self._logger.error(
+                        "Telemetry shutdown worker could not start",
+                        error_type=type(exc).__name__,
+                    )
+                return
+
+        if daemon.is_alive() and daemon is not threading.current_thread():
+            daemon.join(timeout=_WORKER_JOIN_TIMEOUT_SECONDS)
 
     def _get_client(self) -> httpx.Client:
         """Return a reused, long-lived HTTP client (connection reuse)."""
@@ -150,11 +235,28 @@ class QueueEventBus:
     # Background worker
     # ------------------------------------------------------------------ #
     def _drain_loop(self) -> None:
-        """Daemon worker: batch events and ship them until asked to stop."""
-        while not self._stop_event.is_set():
-            batch = self._collect_batch()
-            if batch:
-                self._ship(batch)
+        """Drain, perform the final flush, and close the client on this thread."""
+        try:
+            while not self._stop_event.is_set():
+                batch = self._collect_batch()
+                if batch:
+                    self._ship(batch)
+            with self._lifecycle_lock:
+                drain = self._drain_requested
+                max_attempts = self._final_attempts
+            if drain:
+                self._flush_remaining(max_attempts=max_attempts)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:  # noqa: BLE001 - daemon errors must never escape
+            if self._logger:
+                self._logger.error(
+                    "Telemetry worker failed during shutdown",
+                    error_type=type(exc).__name__,
+                )
+        finally:
+            self._close_client()
+            self._shutdown_complete.set()
 
     def _collect_batch(self) -> List["TelemetryEvent"]:
         """Block up to 1s for one event, then greedily drain up to a batch."""
@@ -176,8 +278,33 @@ class QueueEventBus:
         Uses a single attempt per batch (no long backoff) so a dead control
         plane cannot add retry×backoff seconds to interpreter shutdown.
         """
-        self._stop_event.set()
-        self._flush_remaining(max_attempts=1)
+        self._stop(drain=True, max_attempts=1)
+
+    def _finish_without_worker(self) -> None:
+        """Own final drain/client close when no drain worker was ever started."""
+        try:
+            if self._drain_requested:
+                self._flush_remaining(max_attempts=self._final_attempts)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:  # noqa: BLE001 - stop() is a no-raise boundary
+            if self._logger:
+                self._logger.error(
+                    "Telemetry flush failed during shutdown",
+                    error_type=type(exc).__name__,
+                )
+        finally:
+            self._close_client()
+            self._shutdown_complete.set()
+
+    def _close_client(self) -> None:
+        """Close the client after the last ship; serialized against direct tests."""
+        with self._ship_lock:
+            client = self._client
+            self._client = None
+            if client is not None:
+                with contextlib.suppress(Exception):
+                    client.close()
 
     def _flush_remaining(self, max_attempts: Optional[int] = None) -> None:
         """Ship every event currently in the queue (best-effort, bounded)."""
@@ -210,6 +337,13 @@ class QueueEventBus:
             max_attempts: Override the retry budget (used by the bounded
                 exit-flush to avoid stalling shutdown).
         """
+        with self._ship_lock:
+            return self._ship_locked(batch, max_attempts=max_attempts)
+
+    def _ship_locked(
+        self, batch: List["TelemetryEvent"], max_attempts: Optional[int] = None
+    ) -> bool:
+        """Implementation of :meth:`_ship`, serialized with client closure."""
         if self._config is None:
             # No control plane configured: drain-and-observe only.
             if self._logger:
@@ -253,7 +387,7 @@ class QueueEventBus:
                 if self._circuit_breaker is not None:
                     self._circuit_breaker.record_success()
                 return True
-            except httpx.HTTPError as exc:
+            except Exception as exc:  # noqa: BLE001 - telemetry never reaches host
                 if self._logger:
                     self._logger.warning(
                         "Telemetry ship failed",
@@ -276,6 +410,15 @@ class QueueEventBus:
                     return False
                 # Interruptible backoff so stop() wakes us promptly.
                 if self._stop_event.wait(delay):
+                    with self._dropped_lock:
+                        self._dropped_total += len(batch)
+                        dropped = self._dropped_total
+                    if self._logger:
+                        self._logger.warning(
+                            "Telemetry batch dropped during shutdown",
+                            count=len(batch),
+                            dropped_total=dropped,
+                        )
                     return False
                 delay = min(delay * 2, self._backoff_max)
         return False
@@ -286,7 +429,7 @@ class QueueEventBus:
         created_at = getattr(event, "created_at", None)
         if created_at is not None and hasattr(created_at, "isoformat"):
             created_at = created_at.isoformat()
-        return {
+        payload: Dict[str, Any] = {
             "contract_id": getattr(event, "contract_id", None),
             "contract_version": getattr(event, "contract_version", None),
             "status": getattr(event, "status", None),
@@ -294,3 +437,11 @@ class QueueEventBus:
             "breach_details": getattr(event, "breach_details", None),
             "created_at": created_at,
         }
+        # Emitted only when present, so an ordinary successful event keeps its
+        # exact previous wire shape. Adding unconditional null keys would change
+        # the payload every consumer already parses, for no benefit (P1.5).
+        for optional in ("degraded_reason", "evaluation_stage"):
+            value = getattr(event, optional, None)
+            if value is not None:
+                payload[optional] = str(value)
+        return payload

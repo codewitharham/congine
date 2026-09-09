@@ -40,20 +40,47 @@ outer layer. (`README.md` and `ARCHITECTURE.md` are the authoritative specs.)
 
 | Layer | Package                | Contents                                                                                                                                                                                   |
 | ----- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| L0    | `config`, `exceptions` | Frozen `CongineConfig`, exception hierarchy. Imported by all, depend on none.                                                                                                              |
-| L1    | `ports/`               | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`, `ICircuitBreaker`.                                    |
-| L2    | `domain/`              | Pure logic + immutable models: `RuleEngine`, `LocalValidator`, `CompositeValidator`, `BreachDetail`, `ValidationResult`. No I/O.                                                           |
+| L0    | `config`, `exceptions`, `models`, `security_limits`, `pii_sanitize` | Frozen `CongineConfig`, exception hierarchy, and the canonical value contracts (`BreachDetail`, `ValidationResult`, `TelemetryEvent`, `DriftResult`, `DegradedReason`). Imported by all, depend on none. |
+| L1    | `ports/`               | `typing.Protocol` seams: `IContractRepository`, `IEventBus`, `ILogger`, `ISchemaStorage`, `ISemanticValidator`, `IValidationRunner`, `ICircuitBreaker`, `ISyncRunner`.                     |
+| L2    | `domain/`              | Deterministic judgment and rules: `RuleEngine`, `LocalValidator`, `CompositeValidator`, contract admission, schema vocabulary. No I/O.                                                     |
 | L3    | `usecases/`            | Stateless orchestration: `ValidateContractUseCase`, `SyncContractsUseCase`. Depends only on L1 ports.                                                                                      |
 | L4    | `infrastructure/`      | Side-effecting impls: `LFUCache`, `HttpContractRepository`, `FileContractRepository`, `QueueEventBus`, `BoundedValidationExecutor`, `CircuitBreaker`, `KSDriftEngine`, `StructuredLogger`. |
 | L5    | `adapters/`            | Composition root + framework entry points: `ServiceContainer`, `congine_guard`, `CongineCallbackHandler` (langchain).                                                                      |
 
 Critical layering rules when adding/moving code:
 
+- **The dependency rule is a matrix, not an ordering** (P1). Each layer may
+  import only what its row allows, and `tools/check_architecture.py` enforces it:
+
+  | Layer | May import |
+  | ----- | ---------- |
+  | L0    | L0 |
+  | L1    | L0, L1 |
+  | L2    | L0, L1, L2 |
+  | L3    | L0, L1, L2, L3 |
+  | L4    | L0, L1, **L4** — *not* L2, *not* L3 |
+  | L5    | L0, L1, L2, L3, L4, L5 |
+
+  The L4 row is the one to internalise: infrastructure implements capabilities
+  **declared by ports**, so it does not get to reach into domain or use cases
+  merely because they are numerically inward. If an L4 module needs an L3 type,
+  that is a missing port — add a narrow one (see `ports/sync_runner.py`).
+  **`TYPE_CHECKING` imports are enforced identically**; erasing an import at
+  runtime does not erase the architectural dependency. There are no allowlisted
+  exceptions, and adding one should be a last resort.
+- **Value contracts live in L0** (P1). `BreachDetail`, `ValidationResult`,
+  `TelemetryEvent`, `DriftResult` and `DegradedReason` are the vocabulary every
+  layer exchanges, so they sit in `congine_core/models.py` beside `config` and
+  `exceptions`. They previously lived in `domain/` (L2), which forced ports and
+  infrastructure into edges the gate had to ignore. The split is now: **L0 owns
+  canonical cross-layer value contracts; L2 owns deterministic judgment.**
+  `congine_core/domain/models.py` remains as a compatibility re-export — but it
+  keeps its L2 identity for the gate, so L1/L4 must import `congine_core.models`.
 - **Protocol placement.** Every protocol injected _across_ a layer boundary lives
   in `ports/` (L1). The sole exception is `IValidator` in `domain/validator.py` —
   an in-domain strategy seam that `LocalValidator`/`CompositeValidator` implement.
-  An L1 protocol may reference an L2 value object (e.g. `BreachDetail`) — that is
-  an inward reference; prefer a `TYPE_CHECKING` import to keep L1 import-light.
+  An L1 protocol referencing a value contract now imports it from L0, which is a
+  lawful inward reference; keep it under `TYPE_CHECKING` to stay import-light.
 - **Wiring.** `ServiceContainer.__init__` is the _only_ place concretes are
   constructed. It builds bottom-up (infra → domain → usecases) and injects via
   constructors. No module-level globals; the one sanctioned global is the lazy
@@ -134,12 +161,35 @@ features import lazily and raise/skip when their extra is absent:
   `FakeEventBus`, `FakeSchemaStorage`, `ImmediateTimer`, `FakeContractRepository`)
   that satisfy L1 protocols **without** importing or subclassing them. Prefer these
   over mocks. `asyncio_mode = "auto"` — async tests need no marker.
-- ruff `target-version = py310` is pinned to the supported floor; do not introduce
-  3.11+ syntax. `from __future__ import annotations` is used throughout.
+- **Python floor is 3.11**, declared in exactly four places that must agree
+  (audit Q6): `requires-python` in `pyproject.toml`, the `Programming Language`
+  classifiers, ruff `target-version = "py311"`, and the CI matrix in
+  `.github/workflows/ci.yml`. Do not introduce 3.12+ syntax.
+  `from __future__ import annotations` is used throughout.
 - Adding a `CongineConfig` field is a 4-touch change: the frozen dataclass field,
   the `from_env()` reader (`CONGINE_*`), the `ServiceContainer` wiring (per the
   Wiring rule above), and the **README config-reference table** — that table is the
-  canonical, user-facing config doc and is easy to leave stale.
-- Code comments reference audit IDs (e.g. `audit M5`, `H3`, `D-4`, `FIX-02`) from
-  the workspace-root audit docs (`phase0-congine-newAudit.md`,
-  `phase0-congine-postSessionAudit.md`) — preserve these when editing nearby code.
+  canonical, user-facing config doc and is easy to leave stale. All four are now
+  enforced: `tests/unit/test_config_wiring.py` guards the wiring and
+  `tests/unit/test_readme_config_table.py` fails when a field is undocumented,
+  misdocumented, or documented but nonexistent (audit Q7).
+- **Every path that writes a schema into `ISchemaStorage` must run the
+  unenforced-keyword scan** (`domain.schema_vocabulary.find_unenforced_keywords`)
+  and surface the result. It is the only signal a user gets that part of their
+  contract is decorative, and each new loader that forgets silently reopens the
+  false-safety foot-gun. Enforced by
+  `tests/unit/test_schema_vocabulary.py::test_every_schema_writer_scans_for_unenforced_keywords`
+  (audit P0-2 / Q4).
+- **Ports declare their full surface, including lifecycle.** `ports/lifecycle.py`
+  holds the two cross-cutting seams (`IStoppable`, `IObservable`) that
+  `ISchemaStorage` and `IValidationRunner` compose; `IEventBus` declares its own
+  widened `stop(drain=...)`. If `ServiceContainer` calls a method on a component,
+  that method belongs on the port — a port that under-declares makes a faithful
+  implementation crash in `close()`/`health()` (audit F-15 / Q8).
+- **Audit-ID annotations are maintained, not archival** (audit Q12). Code comments
+  reference audit IDs (`audit M5`, `H3`, `D-4`, `FIX-02`, `P0-1`, `Q7`, …).
+  `docs/architecture/AUDIT_ID_INDEX.md` is the canonical index and **must be
+  updated in the same change** that introduces or closes an ID; annotate the code
+  you touch with the ID that motivated the change. Definitions live in
+  `docs/audits/PHASE0_AUDIT_AND_HEALTH.md` (F-series) and
+  `docs/architecture/OPEN_QUESTIONS.md` (Q-series).

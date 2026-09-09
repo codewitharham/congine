@@ -1,9 +1,13 @@
 """Background contract-sync worker (Layer 4).
 
-:class:`BackgroundSyncWorker` is the *mechanism* that periodically drives the
-:class:`SyncContractsUseCase` *policy* — mirroring how :class:`ValidationTimer`
-(mechanism) drives :class:`ValidateContractUseCase` (policy). It runs a daemon
-thread that wakes every ``interval_seconds`` and calls ``sync_once``.
+:class:`BackgroundSyncWorker` is the mechanism that periodically drives a
+contract-sync policy. It runs a daemon thread that wakes every
+``interval_seconds`` and calls ``sync_once``.
+
+The collaborator is typed as the :class:`~congine_core.ports.sync_runner.ISyncRunner`
+port rather than the concrete ``SyncContractsUseCase`` it is wired to in
+production: infrastructure (L4) may depend on ports (L1), never on use cases
+(L3). See that port's docstring for the full rationale.
 
 The sleep is interruptible (``threading.Event.wait``) so :meth:`stop` wakes the
 worker promptly, and the worker swallows any error from a sync pass so a single
@@ -13,15 +17,15 @@ failure never kills the loop.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import threading
-from typing import TYPE_CHECKING, Optional
+from typing import Callable, Optional
 
+from congine_core.exceptions import CongineLifecycleError
 from congine_core.ports.logger import ILogger
+from congine_core.ports.sync_runner import ISyncRunner
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.usecases.sync_contracts_usecase import (
-        SyncContractsUseCase,
-    )
+_WORKER_JOIN_TIMEOUT_SECONDS = 2.0
 
 
 class BackgroundSyncWorker:
@@ -29,14 +33,14 @@ class BackgroundSyncWorker:
 
     def __init__(
         self,
-        sync_usecase: "SyncContractsUseCase",
-        interval_seconds: int = 300,
+        sync_usecase: ISyncRunner,
+        interval_seconds: float = 300,
         logger: Optional[ILogger] = None,
         run_immediately: bool = True,
         start_worker: bool = False,
     ) -> None:
         """Args:
-        sync_usecase: The use case whose ``sync_once`` is invoked each cycle.
+        sync_usecase: The sync runner whose ``sync_once`` is invoked each cycle.
         interval_seconds: Seconds between sync passes.
         logger: Optional structured logger for observability.
         run_immediately: When ``True`` run one sync before the first wait.
@@ -49,32 +53,64 @@ class BackgroundSyncWorker:
         self._run_immediately = run_immediately
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.Lock()
+        self._closed = False
+        self._atexit_callback: Optional[Callable[[], None]] = None
         if start_worker:
             self.start()
 
     def start(self) -> None:
-        """Start the daemon worker thread (idempotent)."""
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run_loop,
-            name="congine_background_sync",
-            daemon=True,
-        )
-        self._thread.start()
-        atexit.register(self.stop)
+        """Start the daemon once; terminally stopped workers cannot restart."""
+        with self._lifecycle_lock:
+            if self._closed:
+                raise CongineLifecycleError(
+                    "BackgroundSyncWorker is closed and cannot accept new work"
+                )
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            thread = threading.Thread(
+                target=self._run_loop,
+                name="congine_background_sync",
+                daemon=True,
+            )
+            callback = self.stop
+            atexit.register(callback)
+            self._atexit_callback = callback
+            self._thread = thread
+            try:
+                thread.start()
+            except BaseException:
+                self._thread = None
+                self._atexit_callback = None
+                with contextlib.suppress(Exception):
+                    atexit.unregister(callback)
+                raise
 
     def is_running(self) -> bool:
         """Return ``True`` if the worker thread is alive."""
-        return self._thread is not None and self._thread.is_alive()
+        with self._lifecycle_lock:
+            return self._thread is not None and self._thread.is_alive()
 
     def stop(self) -> None:
-        """Signal the worker to stop and join it (idempotent)."""
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=self._interval + 1.0)
+        """Terminally stop the worker with a fixed, bounded join."""
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._stop_event.set()
+            thread = self._thread
+            callback = self._atexit_callback
+            self._atexit_callback = None
+        if callback is not None:
+            with contextlib.suppress(Exception):
+                atexit.unregister(callback)
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=_WORKER_JOIN_TIMEOUT_SECONDS)
 
     def _run_loop(self) -> None:
         """Daemon loop: sync now (optional), then every ``interval`` seconds."""

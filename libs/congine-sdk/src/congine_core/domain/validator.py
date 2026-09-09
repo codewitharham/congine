@@ -13,7 +13,6 @@ import time
 
 import re2 as _re2  # type: ignore[import-untyped]
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -24,11 +23,10 @@ from typing import (
     runtime_checkable,
 )
 
-from congine_core.domain.models import BreachDetail, ValidationResult
+from congine_core.models import BreachDetail, ValidationResult
+from congine_core.exceptions import CongineConfigurationError
+from congine_core.ports.semantic_validator import ISemanticValidator
 from congine_core.security_limits import MAX_PATTERN_LENGTH, MAX_REGEX_VALUE_LENGTH
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.ports.semantic_validator import ISemanticValidator
 
 # Backward-compatible aliases for tests and external references.
 _MAX_PATTERN_LENGTH = MAX_PATTERN_LENGTH
@@ -46,6 +44,9 @@ def _compiled_pattern(pattern: str) -> Any:
 
 #: Mapping from JSON-schema type names to acceptable Python types. ``bool`` is
 #: deliberately excluded from the numeric types (a bool is not a number here).
+#:
+#: Mirrored by ``domain.schema_vocabulary.RECOGNISED_TYPE_NAMES``; the mirror is
+#: guarded against drift by ``tests/unit/test_schema_vocabulary.py``.
 _JSON_TYPE_MAP: Dict[str, Tuple[type, ...]] = {
     "string": (str,),
     "number": (int, float),
@@ -53,6 +54,7 @@ _JSON_TYPE_MAP: Dict[str, Tuple[type, ...]] = {
     "boolean": (bool,),
     "object": (dict,),
     "array": (list,),
+    "null": (type(None),),
 }
 
 
@@ -72,9 +74,40 @@ def _path_present(payload: dict[str, Any], dotted_field: str) -> bool:
     return True
 
 
-def _type_matches(value: Any, json_type: str) -> bool:
-    """Return ``True`` if *value* satisfies JSON-schema *json_type*."""
-    expected = _JSON_TYPE_MAP.get(json_type)
+def _type_label(json_type: Any) -> str:
+    """Render a ``type`` declaration for a breach message.
+
+    A union renders as ``"string|null"`` rather than as a Python list repr.
+    Values come from the schema (type names only), never from the payload, so
+    this is PII-safe by construction.
+    """
+    if isinstance(json_type, (list, tuple)):
+        return "|".join(str(member) for member in json_type)
+    return str(json_type)
+
+
+def _type_matches(value: Any, json_type: Any) -> bool:
+    """Return ``True`` if *value* satisfies JSON-schema *json_type*.
+
+    *json_type* is either a single type name (``"string"``) or a **union** — a
+    list/tuple of names (``["string", "null"]``), the idiomatic JSON Schema
+    spelling of a nullable field. A union matches when *any* member matches
+    (audit Q2/F-21). Before this was supported, a list declaration raised
+    ``TypeError`` from the unhashable dict lookup, which the use case degraded
+    into ``degraded_reason="internal_error"`` — so an otherwise-valid contract
+    silently stopped enforcing anything.
+
+    An unrecognised type name is *not* a breach: the rule declines to judge what
+    it cannot evaluate. Note the interaction with unions — a union containing an
+    unrecognised name therefore matches everything.
+    """
+    if isinstance(json_type, (list, tuple)):
+        # Empty union declares nothing; treat as unevaluable rather than as a
+        # breach, consistent with the unknown-type rule below.
+        if not json_type:
+            return True
+        return any(_type_matches(value, member) for member in json_type)
+    expected = _JSON_TYPE_MAP.get(json_type) if isinstance(json_type, str) else None
     if expected is None:
         # Unknown type declaration: do not flag a breach we cannot evaluate.
         return True
@@ -123,6 +156,13 @@ class RuleEngine:
 
         *schema_properties* maps field name to either a JSON-schema property
         mapping (``{"type": "string"}``) or a bare type string (``"string"``).
+
+        ``type`` may be a single name or a **union** list
+        (``{"type": ["string", "null"]}``) — the idiomatic JSON Schema spelling
+        of a nullable field. A union passes when any member matches.
+
+        A ``None`` value is skipped entirely: nullability is NULL_GUARD's
+        concern, so ``{"type": "string"}`` does **not** breach on ``None``.
         """
         breaches: List[BreachDetail] = []
         for field_name, spec in schema_properties.items():
@@ -140,7 +180,10 @@ class RuleEngine:
                     BreachDetail(
                         rule="TYPE_MATCH",
                         field=field_name,
-                        message=f"Expected type '{json_type}' for field '{field_name}'",
+                        message=(
+                            f"Expected type '{_type_label(json_type)}' "
+                            f"for field '{field_name}'"
+                        ),
                     )
                 )
         return breaches
@@ -213,7 +256,28 @@ class RuleEngine:
     def NULL_GUARD(
         payload: dict[str, Any], null_forbidden: List[str]
     ) -> List[BreachDetail]:
-        """Rule 5: listed fields must not be ``None`` when present."""
+        """Rule 5: listed fields must not be ``None`` when present.
+
+        .. note:: **``null_forbidden`` is a Congine extension, not JSON Schema.**
+
+           A contract using it is no longer a portable JSON Schema document: no
+           other tool understands the keyword, and Congine's own
+           :class:`~congine_core.infrastructure.jsonschema_validator.JsonSchemaSemanticValidator`
+           ignores it even when ``CONGINE_SEMANTIC_VALIDATION=true``. It is
+           retained for backward compatibility and is enforced by the rule
+           engine exactly as documented here.
+
+           **Prefer the portable spelling** — declare the field's type as a
+           union that omits ``"null"`` (``{"type": "string"}``) and list it in
+           ``required``. Union types are supported by TYPE_MATCH, so
+           ``{"type": ["string", "null"]}`` expresses "nullable" and
+           ``{"type": "string"}`` expresses "not nullable" without leaving JSON
+           Schema.
+
+        Only fields that are **present** are checked; an absent field is
+        FIELD_PRESENCE's concern. Field names are matched flatly — unlike
+        ``required``, dot-notation is **not** supported here.
+        """
         breaches: List[BreachDetail] = []
         for field_name in null_forbidden:
             if field_name in payload and payload[field_name] is None:
@@ -411,6 +475,15 @@ class LocalValidator:
 class CompositeValidator:
     """Compose a rule-based :class:`IValidator` with an :class:`ISemanticValidator`.
 
+    .. warning:: **Low-level, unbudgeted API.** This runs both stages back to
+       back with no deadline of any kind. Since P1.5 the governed enforcement
+       boundary is :class:`~congine_core.usecases.validate_contract_usecase.ValidateContractUseCase`,
+       which owns the aggregate deadline, schedules each stage under its own
+       budget, and reports which stage failed. Calling this directly — including
+       via ``ServiceContainer.validator`` — gives you validation without any of
+       that, so it is appropriate for diagnostics and tests, not for a governed
+       product path.
+
     Both collaborators are constructor-injected (composition, not inheritance);
     the semantic validator is consumed purely through its protocol so the domain
     never imports a concrete (e.g. ``jsonschema``-backed) implementation. The
@@ -430,6 +503,16 @@ class CompositeValidator:
             semantic_validator: A full-schema validator injected via its
                 Layer-1 protocol.
         """
+        if not isinstance(rule_validator, IValidator):
+            raise CongineConfigurationError(
+                "Invalid rule_validator: expected an implementation of IValidator"
+            )
+        if not isinstance(semantic_validator, ISemanticValidator):
+            raise CongineConfigurationError(
+                "Invalid semantic_validator: expected an implementation of "
+                "ISemanticValidator"
+            )
+
         self.rule_validator = rule_validator
         self.semantic_validator = semantic_validator
 

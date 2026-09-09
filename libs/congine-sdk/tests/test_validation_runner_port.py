@@ -42,6 +42,10 @@ class FakeRunner:
     def health(self) -> Dict[str, Any]:
         return {"in_flight": 0, "rejected_total": 0, "capacity": self.capacity}
 
+    def shutdown(self, wait: bool = False) -> None:
+        """Part of the port surface the container calls during close() (audit Q8)."""
+        self.shutdown_calls = getattr(self, "shutdown_calls", 0) + 1
+
 
 class _StubValidator(IValidator):
     """An :class:`IValidator` that always returns a pass result."""

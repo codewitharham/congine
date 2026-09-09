@@ -6,12 +6,16 @@ messages before they reach logs or telemetry (FIX-04).
 
 from __future__ import annotations
 
-import re
+from typing import cast
+
+import re2 as _re2  # type: ignore[import-untyped]
 
 
-# Enhanced regular expression pattern to target both single and double quoted values
-# along with raw numerical sequences to prevent unintended PII exposure
-_STRONG_SANITIZATION_RE = re.compile(r"(['\"])(.*?)\1|(\b\d{4,}\b)")
+# RE2 deliberately excludes backreferences, guaranteeing linear-time matching
+# even for attacker-controlled validator messages. Spell the two quote forms as
+# separate alternatives to preserve the legacy sanitizer's output without the
+# stdlib-regex ``(['\"])(.*?)\1`` backreference.
+_STRONG_SANITIZATION_RE = _re2.compile(r'(?:".*?"|\'.*?\'|\b\d{4,}\b)')
 
 
 def sanitize_breach_message(message: str) -> str:
@@ -23,4 +27,4 @@ def sanitize_breach_message(message: str) -> str:
     if not message:
         return message
     sanitized = _STRONG_SANITIZATION_RE.sub("'<redacted>'", message)
-    return sanitized
+    return cast(str, sanitized)

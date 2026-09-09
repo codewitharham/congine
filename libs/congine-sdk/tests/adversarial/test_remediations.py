@@ -142,15 +142,20 @@ def test_bootstrap_inside_running_loop_raises() -> None:
 
 
 def test_validate_missing_creds_nonlocal_raises() -> None:
-    cfg = CongineConfig(
-        base_url="https://cp.prod",
-        api_key=None,
-        project_id=None,
-        tenant_id=None,
-        region=Region.US,
-    )
+    """Non-local without credentials is rejected — now at construction.
+
+    Previously the invalid config was built successfully and only raised on an
+    explicit ``validate()`` call, which nothing obliged a caller to make. The
+    invariant is unchanged; it is simply no longer bypassable.
+    """
     with pytest.raises(CongineConfigurationError):
-        cfg.validate()
+        CongineConfig(
+            base_url="https://cp.prod",
+            api_key=None,
+            project_id=None,
+            tenant_id=None,
+            region=Region.US,
+        )
 
 
 def test_validate_local_is_exempt() -> None:
@@ -165,16 +170,21 @@ def test_validate_local_is_exempt() -> None:
 
 
 def test_validate_https_enforced_when_required() -> None:
-    cfg = CongineConfig(
-        base_url="http://cp.prod",
-        api_key="k",
-        project_id="p",
-        tenant_id="t",
-        region=Region.US,
-        require_https=True,
-    )
+    """Cleartext is refused when HTTPS is required — now at construction.
+
+    ``allow_cleartext`` is deliberately absent: this test exists to prove the
+    HTTPS policy bites, so granting the escape hatch here would assert the
+    opposite of its purpose.
+    """
     with pytest.raises(CongineConfigurationError):
-        cfg.validate()
+        CongineConfig(
+            base_url="http://cp.prod",
+            api_key="k",
+            project_id="p",
+            tenant_id="t",
+            region=Region.US,
+            require_https=True,
+        )
 
 
 # --- C2: snapshot symlink defence ------------------------------------------ #
