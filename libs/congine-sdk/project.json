@@ -23,8 +23,8 @@
     "typecheck": {
       "executor": "nx:run-commands",
       "options": {
-        "cwd": "libs/congine-sdk",
-        "command": "uv run --package congine-sdk --extra dev mypy --config-file pyproject.toml"
+      "cwd": "libs/congine-sdk",
+      "command": "uv run --package congine-sdk --extra langchain --extra stats --extra dev mypy --config-file pyproject.toml src/congine_core"
       }
     },
     "architecture": {
@@ -43,6 +43,39 @@
       "cache": false,
       "options": {
         "command": "uv run --package congine-langchain-example python libs/congine-sdk/examples/LangChain/smoke.py"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "uv run --package congine-sdk --extra langchain --extra stats --extra dev pytest libs/congine-sdk/tests --cov=congine_core --cov-config=libs/congine-sdk/pyproject.toml --cov-report=term",
+        "cwd": "."
+      }
+    },
+    "evidence-trust": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "libs/congine-sdk",
+        "commands": [
+          "uv run --package congine-sdk python -m tools.p0_evidence",
+          "uv run --package congine-sdk python -m tools.p1_5_evidence capability",
+          "uv run --package congine-sdk python -m tools.p2_evidence golden --check",
+          "uv run --package congine-sdk --extra langchain --extra stats --extra dev python -m tools.p2_evidence inventory --check"
+        ],
+        "parallel": false
+      }
+    },
+    "evidence-observational": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "libs/congine-sdk",
+        "commands": [
+          "uv run --package congine-sdk python -m tools.p1_5_evidence deadline"
+        ],
+        "parallel": false
       }
     }
   }

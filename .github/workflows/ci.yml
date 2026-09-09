@@ -64,9 +64,21 @@ jobs:
 
       - name: Set matrix for Python versions
         id: set-matrix
+        # The maintained support set. Must equal the Python classifiers in
+        # libs/congine-sdk/pyproject.toml — a version is supported only when it has
+        # a blocking leg here.
+        #
         # 3.10 removed: `requires-python = ">=3.11"` means uv cannot even resolve
         # the package there, so the 3.10 leg could never have passed (audit Q6).
-        run: echo "versions=['3.11','3.12','3.13']" >> $GITHUB_OUTPUT
+        #
+        # 3.14 added in P2-02. It was already advertised in the classifiers with no
+        # leg behind it; clean lock-based environments now verify it (see
+        # docs/_suite/hardening/P2_SUPPORT_MATRIX.md).
+        #
+        # 3.15 is deliberately absent. Dependency wheels exist for it, which is not
+        # evidence of CONGINE compatibility. `requires-python` intentionally carries
+        # no upper bound: installability and maintained support are different claims.
+        run: echo "versions=['3.11','3.12','3.13','3.14']" >> $GITHUB_OUTPUT
 
   # Job 2: Install & Cache Dependencies
   setup-dependencies:
@@ -138,11 +150,8 @@ jobs:
           npm ci
           uv sync --all-extras
 
-      - name: Check Python Formatting (Ruff)
-        run: uv run --package congine-sdk ruff format --check libs/congine-sdk
-
-      - name: Check Python Imports (Ruff)
-        run: uv run --package congine-sdk ruff check libs/congine-sdk --select F,E902
+      - name: Run SDK Formatting and Lint Gates
+        run: npm exec nx -- run congine-sdk:lint
 
   # Job 4: TypeScript Type Safety
   typecheck:
@@ -249,16 +258,24 @@ jobs:
           npm ci
           uv sync --all-extras
 
+      # `--cov-config` is load-bearing, not decoration. coverage.py discovers
+      # configuration from the *current working directory*, and the workspace root
+      # has no [tool.coverage] section, so without this the SDK's `branch = true`
+      # and `exclude_lines` were silently ignored: this job measured statement-only
+      # coverage against a different denominator than any local run (P2-00b).
+      # `term-summary` was also not a valid --cov-report choice, so the step failed
+      # at argument parsing before running anything.
+
       - name: Run Test Suite with Coverage
         run: |
-          uv run --package congine-sdk pytest \
+          uv run --package congine-sdk --extra langchain --extra stats --extra dev pytest \
             libs/congine-sdk/tests \
             --cov=congine_core \
-            --cov-report=term-summary \
+            --cov-report=term \
             --cov-report=xml \
             --cov-report=html \
             -v
-
+            
       - name: Upload Coverage Reports
         if: always()
         uses: actions/upload-artifact@v4
