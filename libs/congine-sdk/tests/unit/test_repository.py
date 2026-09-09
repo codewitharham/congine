@@ -3,6 +3,7 @@
 """
 
 from __future__ import annotations
+from types import SimpleNamespace
 
 import json
 import os
@@ -199,8 +200,10 @@ def test_load_refuses_foreign_owned_snapshot(
 
 
 def test_owned_by_current_user_non_posix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(repo_mod.os, "name", "nt")
-    assert HttpContractRepository._owned_by_current_user("anything") is True
+    fake_os = SimpleNamespace(name="nt")
+    monkeypatch.setattr(repo_mod, "os", fake_os)
+
+    assert HttpContractRepository._owned_by_current_user("anything")
 
 
 def test_save_snapshot_cleans_temp_on_error(
