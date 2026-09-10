@@ -70,14 +70,6 @@ jobs:
         #
         # 3.10 removed: `requires-python = ">=3.11"` means uv cannot even resolve
         # the package there, so the 3.10 leg could never have passed (audit Q6).
-        #
-        # 3.14 added in P2-02. It was already advertised in the classifiers with no
-        # leg behind it; clean lock-based environments now verify it (see
-        # docs/_suite/hardening/P2_SUPPORT_MATRIX.md).
-        #
-        # 3.15 is deliberately absent. Dependency wheels exist for it, which is not
-        # evidence of CONGINE compatibility. `requires-python` intentionally carries
-        # no upper bound: installability and maintained support are different claims.
         run: echo "versions=['3.11','3.12','3.13','3.14']" >> $GITHUB_OUTPUT
 
   # Job 2: Install & Cache Dependencies
@@ -275,7 +267,7 @@ jobs:
             --cov-report=xml \
             --cov-report=html \
             -v
-            
+
       - name: Upload Coverage Reports
         if: always()
         uses: actions/upload-artifact@v4
