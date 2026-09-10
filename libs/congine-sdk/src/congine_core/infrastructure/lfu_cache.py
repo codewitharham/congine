@@ -12,13 +12,17 @@ concurrent use.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from congine_core.exceptions import CongineLifecycleError
 
 #: Default interval, in seconds, between proactive TTL sweeps.
 _DEFAULT_SWEEP_INTERVAL = 30.0
+_WORKER_JOIN_TIMEOUT_SECONDS = 2.0
 
 
 class LFUCache:
@@ -64,14 +68,10 @@ class LFUCache:
         # --- Background TTL sweeper ------------------------------------- #
         self._stop_event = threading.Event()
         self._sweeper: Optional[threading.Thread] = None
+        self._closed = False
+        self._atexit_callback: Optional[Callable[[], None]] = None
         if start_sweeper:
-            self._sweeper = threading.Thread(
-                target=self._sweep_loop,
-                name="congine_cache_sweeper",
-                daemon=True,
-            )
-            self._sweeper.start()
-            atexit.register(self.stop)
+            self.start()
 
     # ------------------------------------------------------------------ #
     # Public API (ISchemaStorage)
@@ -107,13 +107,12 @@ class LFUCache:
             ttl_seconds: Override TTL for this entry; falls back to the cache
                 default when ``None``.
         """
-        if self.capacity == 0:
-            return
-
-        ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
-        expire_at = time.monotonic() + ttl
-
         with self._lock:
+            if self.capacity == 0:
+                return
+
+            ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
+            expire_at = time.monotonic() + ttl
             if contract_id in self._key_to_value:
                 # Update existing entry's value/expiry and bump its frequency.
                 self._key_to_value[contract_id] = (schema, expire_at)
@@ -159,6 +158,10 @@ class LFUCache:
     def _is_expired(expire_at: float) -> bool:
         """Return ``True`` if the monotonic deadline has passed."""
         return time.monotonic() >= expire_at
+
+    def _ensure_open_locked(self) -> None:
+        if self._closed:
+            raise CongineLifecycleError("LFUCache is closed and cannot accept new work")
 
     def _increment_freq(self, key: str) -> None:
         """Move *key* from its current frequency bucket to the next one."""
@@ -219,7 +222,10 @@ class LFUCache:
         thread promptly instead of waiting out the full interval.
         """
         while not self._stop_event.wait(self.sweep_interval):
-            self.sweep_expired()
+            with self._lock:
+                if self._closed:
+                    return
+                self._sweep_expired_locked()
 
     def sweep_expired(self) -> int:
         """Evict every TTL-expired entry now.
@@ -228,18 +234,59 @@ class LFUCache:
         thread. Returns the number of entries evicted.
         """
         with self._lock:
-            expired: List[str] = [
-                key
-                for key, (_schema, expire_at) in self._key_to_value.items()
-                if self._is_expired(expire_at)
-            ]
-            for key in expired:
-                self._evict_key(key)
-            return len(expired)
+            return self._sweep_expired_locked()
+
+    def _sweep_expired_locked(self) -> int:
+        expired: List[str] = [
+            key
+            for key, (_schema, expire_at) in self._key_to_value.items()
+            if self._is_expired(expire_at)
+        ]
+        for key in expired:
+            self._evict_key(key)
+        return len(expired)
+
+    def start(self) -> None:
+        """Start the sweeper once; terminally stopped caches cannot restart."""
+        with self._lock:
+            self._ensure_open_locked()
+            if self._sweeper is not None and self._sweeper.is_alive():
+                return
+            self._stop_event.clear()
+            sweeper = threading.Thread(
+                target=self._sweep_loop,
+                name="congine_cache_sweeper",
+                daemon=True,
+            )
+            callback = self.stop
+            atexit.register(callback)
+            self._atexit_callback = callback
+            self._sweeper = sweeper
+            try:
+                sweeper.start()
+            except BaseException:
+                self._sweeper = None
+                self._atexit_callback = None
+                with contextlib.suppress(Exception):
+                    atexit.unregister(callback)
+                raise
 
     def stop(self) -> None:
-        """Stop the background sweeper thread (idempotent)."""
-        self._stop_event.set()
-        sweeper = self._sweeper
-        if sweeper is not None and sweeper.is_alive():
-            sweeper.join(timeout=self.sweep_interval + 1.0)
+        """Terminally stop the sweeper with a fixed, bounded join."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._stop_event.set()
+            sweeper = self._sweeper
+            callback = self._atexit_callback
+            self._atexit_callback = None
+        if callback is not None:
+            with contextlib.suppress(Exception):
+                atexit.unregister(callback)
+        if (
+            sweeper is not None
+            and sweeper.is_alive()
+            and sweeper is not threading.current_thread()
+        ):
+            sweeper.join(timeout=_WORKER_JOIN_TIMEOUT_SECONDS)

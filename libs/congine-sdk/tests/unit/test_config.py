@@ -12,7 +12,10 @@ from congine_core.exceptions import CongineConfigurationError
 
 def test_defaults_applied() -> None:
     cfg = CongineConfig(
-        base_url="http://x",
+        # Loopback: these tests inspect defaults, not control-plane policy, and
+        # deliberately pass no credentials. Construction now validates, and a
+        # local URL is exempt — which is what "no control plane involved" means.
+        base_url="http://localhost:8080",
         api_key=None,
         project_id=None,
         tenant_id=None,
@@ -31,6 +34,7 @@ def test_is_frozen() -> None:
         project_id="p",
         tenant_id="t",
         region=Region.EU,
+        allow_cleartext=True,  # cleartext test control plane (declared)
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.base_url = "mutated"  # type: ignore[misc]
@@ -111,7 +115,10 @@ def test_from_env_bad_int(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_feature_flag_defaults() -> None:
     cfg = CongineConfig(
-        base_url="http://x",
+        # Loopback: these tests inspect defaults, not control-plane policy, and
+        # deliberately pass no credentials. Construction now validates, and a
+        # local URL is exempt — which is what "no control plane involved" means.
+        base_url="http://localhost:8080",
         api_key=None,
         project_id=None,
         tenant_id=None,

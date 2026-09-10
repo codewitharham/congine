@@ -23,7 +23,9 @@ concurrency:
 env:
   NODE_VERSION: "20"
   PYTHON_VERSION: "3.13"
-  PYTHON_MIN_VERSION: "3.10"
+  # Must match `requires-python` and ruff `target-version` in
+  # libs/congine-sdk/pyproject.toml (audit Q6).
+  PYTHON_MIN_VERSION: "3.11"
   UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.uv-python
 
 jobs:
@@ -62,7 +64,13 @@ jobs:
 
       - name: Set matrix for Python versions
         id: set-matrix
-        run: echo "versions=['3.10','3.11','3.12','3.13']" >> $GITHUB_OUTPUT
+        # The maintained support set. Must equal the Python classifiers in
+        # libs/congine-sdk/pyproject.toml — a version is supported only when it has
+        # a blocking leg here.
+        #
+        # 3.10 removed: `requires-python = ">=3.11"` means uv cannot even resolve
+        # the package there, so the 3.10 leg could never have passed (audit Q6).
+        run: echo "versions=['3.11','3.12','3.13']" >> $GITHUB_OUTPUT
 
   # Job 2: Install & Cache Dependencies
   setup-dependencies:
@@ -134,11 +142,8 @@ jobs:
           npm ci
           uv sync --all-extras
 
-      - name: Check Python Formatting (Ruff)
-        run: uv run --package congine-sdk ruff format --check libs/congine-sdk
-
-      - name: Check Python Imports (Ruff)
-        run: uv run --package congine-sdk ruff check libs/congine-sdk --select F,E902
+      - name: Run SDK Formatting and Lint Gates
+        run: npm exec nx -- run congine-sdk:lint
 
   # Job 4: TypeScript Type Safety
   typecheck:
@@ -171,7 +176,7 @@ jobs:
   python-lint:
     name: Python Lint (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: setup-dependencies
+    needs: [validate, setup-dependencies]
     strategy:
       fail-fast: false
       matrix:
@@ -200,17 +205,23 @@ jobs:
           npm ci
           uv sync --all-extras
 
-      - name: Run Ruff Lint (All Rules)
-        run: uv run --package congine-sdk ruff check libs/congine-sdk
+      - name: Run SDK Formatting and Lint Gates
+        run: npm exec nx -- run congine-sdk:lint
 
-      - name: Run Mypy Type Checking
-        run: uv run --package congine-sdk mypy libs/congine-sdk || true
+      - name: Run Blocking Production Type Check
+        run: npm exec nx -- run congine-sdk:typecheck
+
+      - name: Enforce Architecture Boundaries
+        run: npm exec nx -- run congine-sdk:architecture
+
+      - name: Run Offline LangChain Example
+        run: npm exec nx -- run congine-sdk:examples
 
   # Job 6: Python Unit & Integration Tests (Multi-version)
   python-test:
     name: Python Tests (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: setup-dependencies
+    needs: [validate, setup-dependencies]
     strategy:
       fail-fast: false
       matrix:
@@ -239,12 +250,20 @@ jobs:
           npm ci
           uv sync --all-extras
 
+      # `--cov-config` is load-bearing, not decoration. coverage.py discovers
+      # configuration from the *current working directory*, and the workspace root
+      # has no [tool.coverage] section, so without this the SDK's `branch = true`
+      # and `exclude_lines` were silently ignored: this job measured statement-only
+      # coverage against a different denominator than any local run (P2-00b).
+      # `term-summary` was also not a valid --cov-report choice, so the step failed
+      # at argument parsing before running anything.
+
       - name: Run Test Suite with Coverage
         run: |
-          uv run --package congine-sdk pytest \
+          uv run --package congine-sdk --extra langchain --extra stats --extra dev pytest \
             libs/congine-sdk/tests \
             --cov=congine_core \
-            --cov-report=term-summary \
+            --cov-report=term \
             --cov-report=xml \
             --cov-report=html \
             -v

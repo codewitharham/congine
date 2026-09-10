@@ -3,6 +3,7 @@
 """
 
 from __future__ import annotations
+from types import SimpleNamespace
 
 import json
 import os
@@ -27,6 +28,7 @@ def _config() -> CongineConfig:
         project_id="proj",
         tenant_id="tenant",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
     )
 
 
@@ -101,6 +103,7 @@ def _config_with_dir(tmp_path) -> CongineConfig:
         project_id="proj",
         tenant_id="tenant",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         snapshot_dir=str(tmp_path),
     )
 
@@ -125,6 +128,7 @@ def test_snapshot_path_is_tenant_scoped(tmp_path) -> None:
         project_id="proj",
         tenant_id="tenant-A",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         snapshot_dir=str(tmp_path),
     )
     cfg_b = CongineConfig(
@@ -133,6 +137,7 @@ def test_snapshot_path_is_tenant_scoped(tmp_path) -> None:
         project_id="proj",
         tenant_id="tenant-B",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         snapshot_dir=str(tmp_path),
     )
     repo_a = HttpContractRepository(cfg_a)
@@ -195,8 +200,10 @@ def test_load_refuses_foreign_owned_snapshot(
 
 
 def test_owned_by_current_user_non_posix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(repo_mod.os, "name", "nt")
-    assert HttpContractRepository._owned_by_current_user("anything") is True
+    fake_os = SimpleNamespace(name="nt")
+    monkeypatch.setattr(repo_mod, "os", fake_os)
+
+    assert HttpContractRepository._owned_by_current_user("anything")
 
 
 def test_save_snapshot_cleans_temp_on_error(

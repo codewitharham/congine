@@ -28,12 +28,12 @@ _SCHEMA = {
 }
 
 
-class _TimeoutTimer:
+class _TimeoutTimer(ImmediateTimer):
     def run_with_timeout(self, func: Any, timeout_ms: int) -> Any:
         raise TimeoutError("too slow")
 
 
-class _ErrorTimer:
+class _ErrorTimer(ImmediateTimer):
     def run_with_timeout(self, func: Any, timeout_ms: int) -> Any:
         raise RuntimeError("boom")
 

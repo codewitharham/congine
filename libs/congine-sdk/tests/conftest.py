@@ -40,7 +40,13 @@ class FakeLogger:
 
 
 class FakeEventBus:
-    """Capturing :class:`IEventBus` test double."""
+    """Capturing :class:`IEventBus` test double.
+
+    Implements the port's full declared surface (``publish``, ``queue_depth``,
+    ``stop``) so it can stand in wherever the container uses a real bus.
+    ``dropped_total`` is deliberately omitted — it is the port's one optional
+    member, and leaving it out keeps the container's ``getattr`` probe honest.
+    """
 
     def __init__(self) -> None:
         self.published: List[TelemetryEvent] = []
@@ -76,12 +82,34 @@ class FakeSchemaStorage:
     def exists(self, contract_id: str) -> bool:
         return contract_id in self._store
 
+    def size(self) -> int:
+        """Part of the port surface the container reports in health()."""
+        return len(self._store)
+
+    def stop(self) -> None:
+        """No-op: nothing to tear down (no sweeper thread)."""
+
 
 class ImmediateTimer:
-    """:class:`ValidationTimer` stand-in that runs *func* inline (no threads)."""
+    """:class:`IValidationRunner` stand-in that runs *func* inline (no threads).
+
+    It implements the complete runtime-checkable port so constructor injection
+    exercises the same composition boundary as production wiring.
+    """
+
+    capacity = 1
 
     def run_with_timeout(self, func: Any, timeout_ms: int) -> Any:
         return func()
+
+    async def run_with_timeout_async(self, func: Any, timeout_ms: int) -> Any:
+        return func()
+
+    def health(self) -> Dict[str, Any]:
+        return {"in_flight": 0, "rejected_total": 0, "capacity": self.capacity}
+
+    def shutdown(self, wait: bool = False) -> None:
+        """No-op: the inline fake owns no resources."""
 
 
 class FakeContractRepository:
@@ -148,6 +176,7 @@ def config() -> CongineConfig:
         project_id="proj-1",
         tenant_id="tenant-1",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
         validation_timeout_ms=50,
         fail_mode=FailMode.DEGRADE,
         cache_capacity=10,

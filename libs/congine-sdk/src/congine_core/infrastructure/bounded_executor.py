@@ -25,8 +25,15 @@ from __future__ import annotations
 import asyncio
 import atexit
 import concurrent.futures
+import contextlib
 import threading
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
+
+# Raised here, caught in Layer 3. Defined in Layer 0 so the use case can catch it
+# without an L3 -> L4 import (audit P0-06).
+from congine_core.exceptions import CongineLifecycleError, LoadShedError
+
+__all__ = ["BoundedValidationExecutor", "LoadShedError"]
 
 
 class BoundedValidationExecutor:
@@ -61,8 +68,11 @@ class BoundedValidationExecutor:
         self._lock = threading.Lock()
         self._in_flight = 0
         self._rejected_total = 0
+        self._shutdown = False
+        self._atexit_callback: Optional[Callable[[], None]] = None
         if register_atexit:
-            atexit.register(self.shutdown)
+            self._atexit_callback = self.shutdown
+            atexit.register(self._atexit_callback)
 
     @property
     def capacity(self) -> int:
@@ -79,7 +89,7 @@ class BoundedValidationExecutor:
         return getattr(self._local, "is_worker", False)
 
     # ------------------------------------------------------------------ #
-    # Public API (compatible with ValidationTimer.run_with_timeout)
+    # Public API (IValidationRunner)
     # ------------------------------------------------------------------ #
     def run_with_timeout(self, func: Callable[[], Any], timeout_ms: int) -> Any:
         """Run *func* with a millisecond timeout, shedding load when saturated.
@@ -92,12 +102,15 @@ class BoundedValidationExecutor:
             Whatever *func* returns.
 
         Raises:
-            TimeoutError: If *func* overruns the budget, OR if the pool is
-                saturated (load shed) — the caller degrades either way.
+            LoadShedError: If the pool is saturated, so *func* never ran.
+            TimeoutError: If *func* ran but overran the budget. Note
+                ``LoadShedError`` subclasses this, so a bare
+                ``except TimeoutError`` still catches both.
         """
         # Re-entrant call from our own worker: run inline to avoid a nested
         # same-pool deadlock (best-effort timeout; CPU work is bounded upstream).
         if self._on_worker_thread():
+            self._ensure_open()
             return func()
 
         future = self._acquire_and_submit(func)
@@ -128,13 +141,17 @@ class BoundedValidationExecutor:
             Whatever *func* returns.
 
         Raises:
-            TimeoutError: If *func* overruns the budget, OR if the pool is
-                saturated (load shed), OR if the pool is already shut down.
+            LoadShedError: If the pool is saturated, so *func* never ran.
+            TimeoutError: If *func* ran but overran the budget.
+                ``LoadShedError`` subclasses this, so a bare
+                ``except TimeoutError`` still catches both capacity outcomes.
+            CongineLifecycleError: If the pool is already shut down.
         """
         # Re-entrancy: if we are already on a pool worker (e.g. the use case is
         # itself running inside an offloaded execute) run inline — no second
         # permit, no nested-pool deadlock. Mirrors the sync path.
         if self._on_worker_thread():
+            self._ensure_open()
             return func()
 
         future = self._acquire_and_submit(func)
@@ -158,21 +175,39 @@ class BoundedValidationExecutor:
         on the returned future, so a timed-out zombie keeps occupying capacity
         until it truly completes.
         """
-        if not self._sem.acquire(blocking=False):
-            with self._lock:
-                self._rejected_total += 1
-            raise TimeoutError("validation capacity exhausted (load shed)")
-
+        # State transition and submission are serialized with shutdown. Once
+        # shutdown wins this lock, no caller can enqueue work into the pool.
         with self._lock:
+            if self._shutdown:
+                raise CongineLifecycleError(
+                    "BoundedValidationExecutor is closed and cannot accept new work"
+                )
+            if not self._sem.acquire(blocking=False):
+                self._rejected_total += 1
+                # Distinct type, not a distinct message (audit P0-06): callers must
+                # never have to parse prose to tell load shed from deadline expiry.
+                raise LoadShedError("validation capacity exhausted (load shed)")
             self._in_flight += 1
-        try:
-            future = self.thread_pool.submit(func)
-        except RuntimeError as exc:  # pool already shut down
-            self._release()
-            raise TimeoutError("validation executor unavailable") from exc
+            try:
+                future = self.thread_pool.submit(func)
+            except RuntimeError as exc:  # defensive: externally shut-down pool
+                self._in_flight -= 1
+                self._sem.release()
+                self._shutdown = True
+                raise CongineLifecycleError(
+                    "BoundedValidationExecutor is closed and cannot accept new work"
+                ) from exc
 
         future.add_done_callback(lambda _f: self._release())
         return future
+
+    def _ensure_open(self) -> None:
+        """Raise when terminal shutdown has begun."""
+        with self._lock:
+            if self._shutdown:
+                raise CongineLifecycleError(
+                    "BoundedValidationExecutor is closed and cannot accept new work"
+                )
 
     def _release(self) -> None:
         with self._lock:
@@ -204,5 +239,14 @@ class BoundedValidationExecutor:
             }
 
     def shutdown(self, wait: bool = False) -> None:
-        """Shut the underlying pool down (idempotent)."""
+        """Shut the pool down terminally and unregister its exit callback."""
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            callback = self._atexit_callback
+            self._atexit_callback = None
+        if callback is not None:
+            with contextlib.suppress(Exception):
+                atexit.unregister(callback)
         self.thread_pool.shutdown(wait=wait)

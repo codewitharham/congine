@@ -75,6 +75,7 @@ def congine_guard(
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             ctx = _resolve()
+            ctx.ensure_open()
             output = fn(*args, **kwargs)
             validation_result = ctx.validate_contract_usecase.execute(
                 payload=_payload(output),
@@ -86,6 +87,7 @@ def congine_guard(
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             ctx = _resolve()
+            ctx.ensure_open()
             output = await fn(*args, **kwargs)
             # Validation is synchronous and CPU-bound. ``execute_async`` runs it
             # OFF the event loop (H2) AND through the bounded, load-shedding pool

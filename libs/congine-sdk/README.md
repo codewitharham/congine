@@ -21,7 +21,7 @@ pip install congine-sdk
 | `langchain` | LangChain `BaseCallbackHandler` integration                      | `pip install 'congine-sdk[langchain]'` |
 | `stats`     | KS-test drift detection (requires NumPy)                         | `pip install 'congine-sdk[stats]'`     |
 | `redos`     | Linear-time regex backend (`re2`) for the rule engine            | `pip install 'congine-sdk[redos]'`     |
-| `dev`       | Test / lint toolchain (pytest, pytest-asyncio, pytest-cov, ruff) | `pip install 'congine-sdk[dev]'`       |
+| `dev`       | Test / lint toolchain (pytest, pytest-asyncio, pytest-cov, ruff, mypy) | `pip install 'congine-sdk[dev]'`       |
 
 `congine-sdk[redos]` is recommended for any deployment that ingests adversarial user input — pattern length caps are still applied by default, but `re2` provides hard linear-time guarantees.
 
@@ -59,41 +59,110 @@ async def reply(prompt: str) -> dict:
 
 The async path goes through the **same bounded, load-shedding executor** as the sync path — there is no `run_in_executor` bypass.
 
+## Container lifecycle
+
+`ServiceContainer` owns worker threads, the validation pool, cache maintenance,
+and optional telemetry clients. Prefer explicit or context-managed ownership:
+
+```python
+from congine_core import ServiceContainer
+
+with ServiceContainer.from_env() as container:
+    container.bootstrap()
+    # construct guards and integrations with container=container
+```
+
+`close()` is thread-safe, bounded, idempotent, and terminal. `closed` reports
+the state, while `ensure_open()` raises `CongineLifecycleError` after shutdown.
+Container methods, guards, and framework adapters check this boundary before
+accepting new work. Create a new container instead of reusing a closed one;
+default and tenant registries automatically replace closed cached instances.
+
+## LangChain callback behavior
+
+`CongineCallbackHandler` propagates every `CongineBaseException`, including
+strict validation failures, missing contracts, and lifecycle failures. It logs
+and contains unrelated host-library callback failures by returning `None`.
+Per-run results and `last_result` share one lock-backed state boundary.
+
+The worked example documents the integration in
+[`examples/LangChain/README.md`](examples/LangChain/README.md). Its deterministic
+offline path is the same command used by CI:
+
+```bash
+uv run --package congine-langchain-example python libs/congine-sdk/examples/LangChain/smoke.py
+```
+
 ---
 
 ## Configuration reference
 
 Every field of `CongineConfig` is settable via `CONGINE_*` environment variables and read by `CongineConfig.from_env()`.
 
-| Field                         | Env var                             | Default                  | Description                                                                         |
-| ----------------------------- | ----------------------------------- | ------------------------ | ----------------------------------------------------------------------------------- |
-| `base_url`                    | `CONGINE_BASE_URL`                  | `http://localhost:8080`  | Control-plane URL.                                                                  |
-| `api_key`                     | `CONGINE_API_KEY`                   | _required for non-local_ | API key.                                                                            |
-| `project_id`                  | `CONGINE_PROJECT_ID`                | _required for non-local_ | Project identifier.                                                                 |
-| `tenant_id`                   | `CONGINE_TENANT_ID`                 | _required for non-local_ | Tenant identifier (multi-tenant isolation).                                         |
-| `region`                      | `CONGINE_REGION`                    | `us`                     | `us` \| `eu` \| `apac`.                                                             |
-| `validation_timeout_ms`       | `CONGINE_TIMEOUT_MS`                | `100`                    | Hard ceiling per validation. Pure rule-engine runs in <1ms; budget covers semantic. |
-| `fail_mode`                   | `CONGINE_FAIL_MODE`                 | `degrade`                | `strict` \| `degrade` \| `silent`. See **Failure modes**.                           |
-| `cache_capacity`              | `CONGINE_CACHE_CAPACITY`            | `500`                    | O(1) LFU cache max entries.                                                         |
-| `cache_ttl_seconds`           | `CONGINE_CACHE_TTL`                 | `300`                    | Default TTL per cached schema.                                                      |
-| `sync_enabled`                | `CONGINE_SYNC_ENABLED`              | `false`                  | Start the periodic background sync worker on bootstrap.                             |
-| `sync_interval_seconds`       | `CONGINE_SYNC_INTERVAL`             | `300`                    | Background sync cadence.                                                            |
-| `semantic_validation_enabled` | `CONGINE_SEMANTIC_VALIDATION`       | `false`                  | Compose `jsonschema` validator on top of the rule engine.                           |
-| `drift_threshold`             | `CONGINE_DRIFT_THRESHOLD`           | `0.1`                    | KS-test p-value below which drift is flagged. Requires `[stats]`.                   |
-| `drift_sample_limit`          | `CONGINE_DRIFT_SAMPLE_LIMIT`        | `500`                    | Reference-window cap for the drift engine.                                          |
-| `validation_max_workers`      | `CONGINE_VALIDATION_WORKERS`        | `10`                     | Concurrent validation worker threads.                                               |
-| `validation_max_pending`      | `CONGINE_VALIDATION_PENDING`        | `10`                     | Pending slots before load is shed. Capacity = workers + pending.                    |
-| `snapshot_dir`                | `CONGINE_SNAPSHOT_DIR`              | per-user OS-app dir      | Per-user snapshot location (NOT world-shared `/tmp`).                               |
-| `require_https`               | `CONGINE_REQUIRE_HTTPS`             | `true`                   | Enforce HTTPS on non-local control planes. **Secure default**.                      |
-| `allow_cleartext`             | `CONGINE_ALLOW_CLEARTEXT`           | `false`                  | Explicit opt-out for dev / internal use. Emits a loud warning at boot.              |
-| `log_level`                   | `CONGINE_LOG_LEVEL`                 | `INFO`                   | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`.                                          |
-| `log_safe_fields`             | `CONGINE_LOG_SAFE_FIELDS`           | _none_                   | Comma-separated allowlist for structured-extra logging keys (PII safety).           |
-| `breaker_failure_threshold`   | `CONGINE_BREAKER_FAILURE_THRESHOLD` | `5`                      | Consecutive failures before the circuit breaker trips OPEN.                         |
-| `breaker_cooldown_seconds`    | `CONGINE_BREAKER_COOLDOWN_SECONDS`  | `30.0`                   | Seconds the breaker stays OPEN before allowing a HALF_OPEN probe.                   |
-| `deployment_mode`             | `CONGINE_DEPLOYMENT_MODE`           | `single_tenant`          | `multi_tenant` disables `get_default()` — use explicit containers.                  |
-| `max_payload_bytes`           | `CONGINE_MAX_PAYLOAD_BYTES`         | `1048576`                | Max validation payload size (bytes).                                                |
-| `semantic_format_checking`    | `CONGINE_SEMANTIC_FORMAT_CHECKING`  | `false`                  | Enable jsonschema format assertions (off by default for safety).                    |
-| `start_background_services`   | `CONGINE_START_BACKGROUND_SERVICES` | `true`                   | Start telemetry/cache daemons at container init.                                    |
+| Field | Env var | Default | Description |
+| ----- | ------- | ------- | ----------- |
+| `base_url` | `CONGINE_BASE_URL` | `http://localhost:8080` | Control-plane URL. **The only setting that selects a control plane.** Required whenever `region` is set. |
+| `api_key` | `CONGINE_API_KEY` | _required for non-local_ | API key. Sent as `X-API-Key` on every control-plane request. |
+| `project_id` | `CONGINE_PROJECT_ID` | _required for non-local_ | Project identifier. Sent as `X-Project-ID`; scopes the snapshot path. |
+| `tenant_id` | `CONGINE_TENANT_ID` | _required for non-local_ | Tenant identifier. Sent as `X-Tenant-ID`; scopes the snapshot path. |
+| `region` | `CONGINE_REGION` | `us` | `us` \| `eu` \| `apac`. **Metadata only — it does not select an endpoint.** Only `CONGINE_BASE_URL` chooses a control plane. Setting `region` *without* `base_url` raises rather than silently falling back to loopback. |
+| `validation_timeout_ms` | `CONGINE_TIMEOUT_MS` | `100` | **Aggregate governed validation deadline budget** covering orchestration, queue wait, native evaluation and semantic evaluation. Not a hard wall-clock ceiling and not a worker cancellation deadline: the caller stops waiting once exhaustion is observable, but already-running thread work is not force-cancelled. The guarantee is that a result completing after its deadline is never returned as enforced. |
+| `native_validation_timeout_ms` | `CONGINE_NATIVE_TIMEOUT_MS` | `None` | Optional cap on the native stage. `None` inherits whatever aggregate budget remains when the stage starts. Must be `> 0` and `<= validation_timeout_ms`. |
+| `semantic_validation_timeout_ms` | `CONGINE_SEMANTIC_TIMEOUT_MS` | `None` | Optional cap on the semantic stage. Same rules as the native cap. Exceeding it yields `degraded_reason="semantic_timeout"`, distinct from a native timeout and from a load shed. |
+| `fail_mode` | `CONGINE_FAIL_MODE` | `degrade` | `strict` \| `degrade` \| `silent`. See **Failure modes**. |
+| `cache_capacity` | `CONGINE_CACHE_CAPACITY` | `500` | O(1) LFU cache max entries. `0` disables caching entirely. |
+| `cache_ttl_seconds` | `CONGINE_CACHE_TTL` | `300` | Default TTL per cached schema; also the TTL the sync use case applies on each `put`. |
+| `cache_sweep_interval_seconds` | `CONGINE_CACHE_SWEEP_INTERVAL_SECONDS` | `30.0` | Interval between proactive TTL sweeps by the cache daemon. |
+| `sync_enabled` | `CONGINE_SYNC_ENABLED` | `false` | Start the periodic background sync worker on `bootstrap()`. |
+| `sync_interval_seconds` | `CONGINE_SYNC_INTERVAL` | `300` | Background sync cadence. |
+| `semantic_validation_enabled` | `CONGINE_SEMANTIC_VALIDATION` | `false` | Compose the full `jsonschema` validator on top of the rule engine. Contract admission remains a separate fail-closed boundary. |
+| `semantic_max_breaches` | `CONGINE_SEMANTIC_MAX_BREACHES` | `100` | Cap on breaches drained from the semantic validator; a `SEMANTIC_TRUNCATED` marker is appended when hit. |
+| `semantic_format_checking` | `CONGINE_SEMANTIC_FORMAT_CHECKING` | `false` | Enable jsonschema `format` assertions (off by default for safety). |
+| `drift_threshold` | `CONGINE_DRIFT_THRESHOLD` | `0.1` | KS **D-statistic** above which drift is flagged — not the p-value. Requires `[stats]`. |
+| `drift_sample_limit` | `CONGINE_DRIFT_SAMPLE_LIMIT` | `500` | Reference-window cap for the drift engine. |
+| `jsonschema_draft` | `CONGINE_JSONSCHEMA_DRAFT` | `draft202012` | JSON Schema dialect (`draft202012`, `draft201909`, `draft7`, `draft6`, `draft4`). **Fail-closed**: an unrecognised value raises at container construction, even when semantic validation is off. |
+| `validation_max_workers` | `CONGINE_VALIDATION_WORKERS` | `10` | Concurrent validation worker threads. |
+| `validation_max_pending` | `CONGINE_VALIDATION_PENDING` | `10` | Pending slots before load is shed. Capacity = workers + pending. |
+| `contract_source` | `CONGINE_CONTRACT_SOURCE` | `http` | `http` or `file`. `file` selects the file repository **only** in combination with `contracts_dir`. **Validated** — an unrecognised value raises instead of silently meaning `http`. |
+| `contracts_dir` | `CONGINE_CONTRACTS_DIR` | _none_ | Contract directory used when `contract_source=file`. Keeps the background sync worker allocated. Unset to disable; an **empty** value raises. |
+| `local_contracts_dir` | `CONGINE_LOCAL_CONTRACTS_DIR` | _none_ | **Standalone switch.** Binds a `FileContractRepository` to this directory and leaves the sync worker unallocated (`container.sync_worker is None`). Leave it *unset* to disable — an **empty** value raises rather than selecting standalone mode against an empty directory. |
+| `contract_admission` | `CONGINE_CONTRACT_ADMISSION` | `strict` | `strict` or `warn`. Contracts are admitted before being cached; one whose meaning CONGINE cannot determine is refused and never becomes active policy. `warn` adds migration advisories for enforceable legacy constructs — it **cannot** admit an invalid or unenforceable contract. See **Contract admission**. |
+| `telemetry_enabled` | `CONGINE_TELEMETRY_ENABLED` | `true` | `false` selects `NoOpEventBus`: no drain thread, no HTTP client, no network. |
+| `telemetry_queue_size` | `CONGINE_TELEMETRY_QUEUE_SIZE` | `10000` | Buffered events before `publish` starts dropping (and counting) them. |
+| `telemetry_batch_size` | `CONGINE_TELEMETRY_BATCH_SIZE` | `100` | Maximum events shipped per POST. |
+| `telemetry_max_retries` | `CONGINE_TELEMETRY_MAX_RETRIES` | `4` | Attempts per batch before it is dropped and the circuit breaker records a failure. |
+| `telemetry_backoff_base` | `CONGINE_TELEMETRY_BACKOFF_BASE` | `0.5` | First retry delay in seconds; doubles each attempt. |
+| `telemetry_backoff_max` | `CONGINE_TELEMETRY_BACKOFF_MAX` | `8.0` | Ceiling on the exponential backoff delay. |
+| `control_plane_http_timeout_seconds` | `CONGINE_CONTROL_PLANE_HTTP_TIMEOUT` | `10.0` | HTTP timeout for **both** control-plane paths (contract fetch and telemetry ship). The worst-case boot stall when the breaker is CLOSED. |
+| `snapshot_dir` | `CONGINE_SNAPSHOT_DIR` | per-user OS app dir | Per-user snapshot location (NOT world-shared `/tmp`). |
+| `snapshot_lock_timeout_seconds` | `CONGINE_SNAPSHOT_LOCK_TIMEOUT` | `10.0` | How long a writer waits for the advisory snapshot lock before skipping its best-effort write. |
+| `require_https` | `CONGINE_REQUIRE_HTTPS` | `true` | Enforce HTTPS on non-local control planes. **Secure default**. |
+| `allow_cleartext` | `CONGINE_ALLOW_CLEARTEXT` | `false` | Explicit opt-out for dev / internal use. Emits a loud warning at boot. |
+| `log_level` | `CONGINE_LOG_LEVEL` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`. An unrecognised value falls back to `INFO`. |
+| `log_safe_fields` | `CONGINE_LOG_SAFE_FIELDS` | _none_ | Comma-separated allowlist for structured-extra logging keys. Overrides auto-redaction; an empty value redacts everything. |
+| `log_redaction_enabled` | `CONGINE_LOG_REDACTION` | `true` | When no explicit allowlist is set, apply the built-in 12-key allowlist on non-local control planes. |
+| `breaker_failure_threshold` | `CONGINE_BREAKER_FAILURE_THRESHOLD` | `5` | Consecutive failures before the circuit breaker trips OPEN. |
+| `breaker_cooldown_seconds` | `CONGINE_BREAKER_COOLDOWN_SECONDS` | `30.0` | Seconds the breaker stays OPEN before allowing a HALF_OPEN probe. |
+| `deployment_mode` | `CONGINE_DEPLOYMENT_MODE` | `single_tenant` | `multi_tenant` disables `get_default()` — use explicit containers or `for_tenant()`. |
+| `max_payload_bytes` | `CONGINE_MAX_PAYLOAD_BYTES` | `1048576` | Max validation payload size, measured as JSON-encoded characters (see the note below the table). |
+| `max_schema_bytes` | `CONGINE_MAX_SCHEMA_BYTES` | `1048576` | Max size of a **cached schema** on the validation hot path. |
+| `max_contract_files` | `CONGINE_MAX_CONTRACT_FILES` | `1000` | Stop scanning a contracts directory after this many files. |
+| `max_contract_file_bytes` | `CONGINE_MAX_CONTRACT_FILE_BYTES` | `1048576` | Max bytes read per **contract file** on disk. Distinct from `max_schema_bytes`. |
+| `max_stream_buffer_chars` | `CONGINE_MAX_STREAM_BUFFER_CHARS` | `500000` | LangChain token-buffer cap; excess tokens are silently clipped. |
+| `max_http_response_bytes` | `CONGINE_MAX_HTTP_RESPONSE_BYTES` | `10485760` | Control-plane response ceiling, checked before the body is parsed. |
+| `start_background_services` | `CONGINE_START_BACKGROUND_SERVICES` | `true` | Start the cache sweeper and telemetry drain daemons (and their atexit hooks) at container init. `false` is for tests and embedders that manage their own lifecycle — it is **not** an offline switch. |
+
+> **On the two size budgets.** `max_payload_bytes` and `max_schema_bytes` are
+> measured as `len(json.dumps(value))` — the JSON-encoded, ASCII-escaped
+> character count. Because `json.dumps` escapes non-ASCII, that number is
+> *larger* than the compact UTF-8 size of the same data (a payload whose UTF-8
+> form is 29 bytes measures 69). The guard is therefore conservative: it rejects
+> earlier than a true byte count would, never later.
+
+> **`max_schema_bytes` vs `max_contract_file_bytes`.** The first bounds a
+> *cached schema* on the validation hot path; the second bounds a *file read* at
+> load time. They default to the same value but are independent knobs — tuning
+> one no longer moves the other.
 
 ---
 

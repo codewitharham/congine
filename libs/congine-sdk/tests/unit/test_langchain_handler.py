@@ -18,7 +18,11 @@ from congine_core.adapters.langchain_handler import (  # noqa: E402
     CongineCallbackHandler,
 )
 from congine_core.domain.models import ValidationResult  # noqa: E402
-from congine_core.exceptions import CongineContractNotFoundError  # noqa: E402
+from congine_core.exceptions import (  # noqa: E402
+    CongineContractNotFoundError,
+    CongineLifecycleError,
+    CongineValidationError,
+)
 from tests.conftest import FakeLogger  # noqa: E402
 
 
@@ -40,6 +44,13 @@ class _Container:
     def __init__(self) -> None:
         self.validate_contract_usecase = _UseCase()
         self.logger = FakeLogger()
+        self.closed = False
+        self.ensure_open_calls = 0
+
+    def ensure_open(self) -> None:
+        self.ensure_open_calls += 1
+        if self.closed:
+            raise CongineLifecycleError("container is closed")
 
 
 def _handler(**kw: Any) -> tuple[CongineCallbackHandler, _Container]:
@@ -60,6 +71,7 @@ def test_on_llm_end_validates_joined_completion() -> None:
     assert container.validate_contract_usecase.calls == [
         ({"text": "Hello world"}, "c1", "latest")
     ]
+    assert container.ensure_open_calls == 4
 
 
 def test_high_throughput_concurrent_tokens_same_run() -> None:
@@ -113,16 +125,127 @@ def test_buffer_cleared_after_end() -> None:
     assert "r" not in handler._buffers
 
 
-def test_degradation_swallows_usecase_error() -> None:
+def test_sdk_usecase_error_is_rethrown() -> None:
     handler, container = _handler()
     container.validate_contract_usecase.raise_exc = CongineContractNotFoundError(
         "missing"
     )
     handler.on_llm_new_token("hi", run_id="r")
-    result = handler.on_llm_end(run_id="r")  # must NOT raise
-    assert result is None
+    with pytest.raises(CongineContractNotFoundError, match="missing"):
+        handler.on_llm_end(run_id="r")
     assert handler.last_result is None
     assert "ERROR" in container.logger.levels()
+
+
+def test_strict_validation_error_is_rethrown() -> None:
+    handler, container = _handler()
+    container.validate_contract_usecase.raise_exc = CongineValidationError(
+        "strict contract breach"
+    )
+
+    with pytest.raises(CongineValidationError, match="strict contract breach"):
+        handler.on_llm_end(run_id="r")
+
+    assert handler.last_result is None
+    assert "ERROR" in container.logger.levels()
+
+
+def test_unexpected_usecase_error_is_logged_and_contained() -> None:
+    handler, container = _handler()
+    container.validate_contract_usecase.raise_exc = RuntimeError("internal")
+    handler.on_llm_new_token("hi", run_id="r")
+    assert handler.on_llm_end(run_id="r") is None
+    assert handler.result_for("r") is None
+    assert handler.last_result is None
+    assert "ERROR" in container.logger.levels()
+
+
+def test_malformed_token_is_logged_and_contained() -> None:
+    handler, container = _handler()
+
+    assert handler.on_llm_new_token(42, run_id="r") is None  # type: ignore[arg-type]
+
+    assert "r" not in handler._buffers
+    assert "ERROR" in container.logger.levels()
+
+
+def test_unexpected_response_extraction_error_is_logged_and_contained() -> None:
+    handler, container = _handler()
+
+    class _MalformedResponse:
+        @property
+        def generations(self) -> Any:
+            raise RuntimeError("malformed host response")
+
+    assert handler.on_llm_end(response=_MalformedResponse(), run_id="r") is None
+    assert handler.last_result is None
+    assert not container.validate_contract_usecase.calls
+    assert "ERROR" in container.logger.levels()
+
+
+def test_unhashable_host_run_id_is_contained() -> None:
+    handler, container = _handler()
+    handler.on_llm_new_token("seed", run_id="seed")
+
+    assert handler.on_llm_end(run_id=[]) is None
+
+    assert not container.validate_contract_usecase.calls
+    assert "ERROR" in container.logger.levels()
+
+
+def test_logger_failure_does_not_replace_sdk_or_host_error_policy() -> None:
+    handler, container = _handler()
+
+    class _RaisingLogger:
+        def error(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("logger unavailable")
+
+    container.logger = _RaisingLogger()  # type: ignore[assignment]
+    handler._logger = container.logger
+    container.validate_contract_usecase.raise_exc = CongineValidationError("strict")
+
+    with pytest.raises(CongineValidationError, match="strict"):
+        handler.on_llm_end(run_id="sdk")
+
+    container.validate_contract_usecase.raise_exc = RuntimeError("host")
+    assert handler.on_llm_end(run_id="host") is None
+
+
+def test_closed_container_is_rejected_before_callback_state_mutation() -> None:
+    handler, container = _handler()
+    handler.on_llm_new_token("partial", run_id="r")
+    container.closed = True
+
+    with pytest.raises(CongineLifecycleError, match="closed"):
+        handler.on_llm_end(run_id="r")
+
+    assert handler._buffers["r"] == ["partial"]
+    assert handler.result_for("r") is None
+    assert handler.last_result is None
+    assert not container.validate_contract_usecase.calls
+
+
+def test_closed_container_rejects_token_before_buffer_mutation() -> None:
+    handler, container = _handler()
+    container.closed = True
+
+    with pytest.raises(CongineLifecycleError, match="closed"):
+        handler.on_llm_new_token("must-not-buffer", run_id="r")
+
+    assert "r" not in handler._buffers
+    assert "r" not in handler._buffer_lengths
+    assert handler.result_for("r") is None
+
+
+def test_closed_container_rejects_error_callback_before_state_mutation() -> None:
+    handler, container = _handler()
+    handler.on_llm_new_token("partial", run_id="r")
+    container.closed = True
+
+    with pytest.raises(CongineLifecycleError, match="closed"):
+        handler.on_llm_error(RuntimeError("host failure"), run_id="r")
+
+    assert handler._buffers["r"] == ["partial"]
 
 
 def test_custom_payload_key() -> None:
@@ -147,6 +270,41 @@ def test_on_llm_error_discards_partial_buffer() -> None:
     handler.on_llm_new_token("partial", run_id="r")
     handler.on_llm_error(RuntimeError("llm failed"), run_id="r")
     assert "r" not in handler._buffers
+    assert handler.result_for("r") is None
+    assert handler.last_result is None
+
+
+def test_completed_results_are_consistent_under_concurrency() -> None:
+    handler, _ = _handler()
+    completed: dict[str, ValidationResult] = {}
+    completed_lock = threading.Lock()
+
+    def validate(rid: str) -> None:
+        handler.on_llm_new_token(rid, run_id=rid)
+        result = handler.on_llm_end(run_id=rid)
+        assert result is not None
+        with completed_lock:
+            completed[rid] = result
+
+    threads = [
+        threading.Thread(target=validate, args=(f"run-{index}",))
+        for index in range(100)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(completed) == len(threads)
+    assert all(handler.result_for(rid) is result for rid, result in completed.items())
+    assert any(handler.last_result is result for result in completed.values())
+
+
+def test_last_result_assignment_remains_lock_backed_and_compatible() -> None:
+    handler, _ = _handler()
+    result = ValidationResult(status="pass")
+    handler.last_result = result
+    assert handler.last_result is result
 
 
 def test_lazy_adapter_export() -> None:

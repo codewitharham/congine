@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, List, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from congine_core.domain.models import BreachDetail
+    from congine_core.models import BreachDetail
 
 
 @runtime_checkable

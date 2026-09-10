@@ -9,13 +9,24 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
+from congine_core.ports.lifecycle import IStoppable
+
 
 @runtime_checkable
-class ISchemaStorage(Protocol):
+class ISchemaStorage(IStoppable, Protocol):
     """Structural interface for schema caching/retrieval.
 
     Implementations must be safe for concurrent use and must honour TTL
     semantics: an expired entry is treated as absent.
+
+    :meth:`get` sits on the validation hot path *outside* the timeout guard, so
+    it must never block. :meth:`put` must be individually atomic and must never
+    clear the store: the sync use case updates keys in place precisely so a
+    concurrent ``get`` always observes a coherent cache.
+
+    Composes :class:`~congine_core.ports.lifecycle.IStoppable` — the container
+    calls ``stop()`` during ``close()`` — and additionally requires
+    :meth:`size`, which ``health()`` reports (audit Q8).
     """
 
     def get(self, contract_id: str) -> Optional[Dict[str, Any]]:
@@ -56,5 +67,13 @@ class ISchemaStorage(Protocol):
 
         Returns:
             ``True`` if a live (non-expired) entry exists, else ``False``.
+        """
+        ...
+
+    def size(self) -> int:
+        """Return the number of cached entries.
+
+        Reported by :meth:`ServiceContainer.health` as ``cache_entries``. May
+        include entries whose TTL has elapsed but which have not yet been swept.
         """
         ...

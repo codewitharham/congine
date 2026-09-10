@@ -1,0 +1,83 @@
+{
+ "budget_ms": 100,
+ "cases_blocking_slice_c": [],
+ "cooperative_control": {
+  "budget_ms": 100,
+  "caller_elapsed_ms": 110.33,
+  "case": "cooperative-control(sleep 1s)",
+  "in_flight_after_return": 1,
+  "outcome": "TimeoutError",
+  "overrun_ratio": 1.1,
+  "worker_running_at_return": true,
+  "worker_tail_ms": 890.92,
+  "worker_total_ms": 1000.44
+ },
+ "deadline_observable_everywhere": true,
+ "kind": "p1_5_deadline_fidelity",
+ "observations": [
+  {
+   "budget_ms": 100,
+   "caller_elapsed_ms": 52.38,
+   "case": "semantic-large",
+   "in_flight_after_return": 0,
+   "outcome": "normal-result",
+   "overrun_ratio": 0.52,
+   "worker_running_at_return": false,
+   "worker_tail_ms": null,
+   "worker_total_ms": 51.74
+  },
+  {
+   "budget_ms": 100,
+   "caller_elapsed_ms": 35.73,
+   "case": "semantic-nested-d4",
+   "in_flight_after_return": 0,
+   "outcome": "normal-result",
+   "overrun_ratio": 0.36,
+   "worker_running_at_return": false,
+   "worker_tail_ms": null,
+   "worker_total_ms": 35.4
+  },
+  {
+   "budget_ms": 100,
+   "caller_elapsed_ms": 140.8,
+   "case": "semantic-nested-d6",
+   "in_flight_after_return": 1,
+   "outcome": "TimeoutError",
+   "overrun_ratio": 1.41,
+   "worker_running_at_return": true,
+   "worker_tail_ms": 177.97,
+   "worker_total_ms": 318.41
+  },
+  {
+   "budget_ms": 100,
+   "caller_elapsed_ms": 28.88,
+   "case": "semantic-combinator-20",
+   "in_flight_after_return": 0,
+   "outcome": "normal-result",
+   "overrun_ratio": 0.29,
+   "worker_running_at_return": false,
+   "worker_tail_ms": null,
+   "worker_total_ms": 28.52
+  },
+  {
+   "budget_ms": 100,
+   "caller_elapsed_ms": 12.46,
+   "case": "semantic-refs-40",
+   "in_flight_after_return": 0,
+   "outcome": "normal-result",
+   "overrun_ratio": 0.12,
+   "worker_running_at_return": false,
+   "worker_tail_ms": null,
+   "worker_total_ms": 12.01
+  }
+ ],
+ "platform": {
+  "google_re2": "1.1.20251105",
+  "implementation": "CPython",
+  "jsonschema": "4.26.0",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 140 Stepping 1, GenuineIntel",
+  "python": "3.14.6",
+  "referencing": "0.37.0"
+ }
+}

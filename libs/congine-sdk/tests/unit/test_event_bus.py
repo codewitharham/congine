@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Callable, List
 
 import httpx
+import pytest
 
 from congine_core.config import CongineConfig, Region
 from congine_core.domain.models import TelemetryEvent
+from congine_core.infrastructure import queue_event_bus as queue_event_bus_module
 from congine_core.infrastructure.queue_event_bus import QueueEventBus
 from tests.conftest import FakeLogger
 
@@ -19,6 +23,7 @@ def _config() -> CongineConfig:
         project_id="proj",
         tenant_id="tenant",
         region=Region.US,
+        allow_cleartext=True,  # cleartext test control plane (declared)
     )
 
 
@@ -182,3 +187,79 @@ def test_dropped_total_increments_after_ship_retries_fail() -> None:
     assert bus._ship([_event("a"), _event("b")]) is False
     # Both batched events are counted as dropped.
     assert bus.dropped_total() == 2
+
+
+def test_publish_after_stop_is_rejected_and_counted() -> None:
+    bus = QueueEventBus(start_worker=False)
+    bus.stop(drain=False)
+    assert bus._shutdown_complete.wait(1.0)
+
+    bus.publish(_event("late"))
+
+    assert bus.queue_depth() == 0
+    assert bus.dropped_total() == 1
+
+
+def test_no_worker_stop_is_bounded_and_finisher_owns_client_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_started = threading.Event()
+    release_request = threading.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_started.set()
+        release_request.wait(2.0)
+        return httpx.Response(202)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    bus = QueueEventBus(
+        config=_config(),
+        client_factory=lambda: client,
+        start_worker=False,
+    )
+    ship_thread = threading.Thread(target=lambda: bus._ship([_event()]), daemon=True)
+    ship_thread.start()
+    assert request_started.wait(1.0)
+
+    monkeypatch.setattr(queue_event_bus_module, "_WORKER_JOIN_TIMEOUT_SECONDS", 0.05)
+    started = time.perf_counter()
+    bus.stop(drain=False)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.5
+    assert client.is_closed is False
+
+    release_request.set()
+    ship_thread.join(1.0)
+    assert bus._shutdown_complete.wait(1.0)
+    assert client.is_closed is True
+
+
+def test_interrupted_retry_batch_is_counted_as_dropped() -> None:
+    request_attempted = threading.Event()
+    result: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_attempted.set()
+        return httpx.Response(500)
+
+    bus = QueueEventBus(
+        config=_config(),
+        client_factory=_client_factory(handler),
+        max_retries=3,
+        backoff_base=5.0,
+        backoff_max=5.0,
+        start_worker=False,
+    )
+    batch = [_event("a"), _event("b")]
+    ship_thread = threading.Thread(
+        target=lambda: result.append(bus._ship(batch)), daemon=True
+    )
+    ship_thread.start()
+    assert request_attempted.wait(1.0)
+
+    bus.stop(drain=False)
+    ship_thread.join(1.0)
+
+    assert result == [False]
+    assert bus.dropped_total() == len(batch)

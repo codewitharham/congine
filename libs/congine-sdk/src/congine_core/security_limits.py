@@ -15,6 +15,11 @@ MAX_REGEX_VALUE_LENGTH = 50_000
 DEFAULT_MAX_PAYLOAD_BYTES = 1_048_576
 DEFAULT_MAX_SCHEMA_BYTES = 1_048_576
 DEFAULT_MAX_CONTRACT_FILES = 1000
+# Per-contract-file read cap. Distinct from DEFAULT_MAX_SCHEMA_BYTES (audit Q11):
+# one bounds a *cached schema* on the validation hot path, the other bounds a
+# *file read* at load. They defaulted to the same value and were wired from a
+# single config field, so tuning one silently moved the other.
+DEFAULT_MAX_CONTRACT_FILE_BYTES = 1_048_576
 DEFAULT_MAX_STREAM_BUFFER_CHARS = 500_000
 DEFAULT_MAX_HTTP_RESPONSE_BYTES = 10_485_760
 
@@ -27,6 +32,7 @@ __all__ = [
     "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_MAX_SCHEMA_BYTES",
     "DEFAULT_MAX_CONTRACT_FILES",
+    "DEFAULT_MAX_CONTRACT_FILE_BYTES",
     "DEFAULT_MAX_STREAM_BUFFER_CHARS",
     "DEFAULT_MAX_HTTP_RESPONSE_BYTES",
     "DEFAULT_SEMANTIC_MAX_BREACHES",

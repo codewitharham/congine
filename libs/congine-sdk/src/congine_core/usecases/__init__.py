@@ -1,6 +1,6 @@
 """Layer 3: Workflows (use cases).
 
-Depends on: repositories (Layer 1), domain (Layer 2), and the timer utility.
+Depends on Layer-1 ports and Layer-2 domain policy.
 """
 
 from congine_core.usecases.sync_contracts_usecase import SyncContractsUseCase
