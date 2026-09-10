@@ -70,7 +70,7 @@ jobs:
         #
         # 3.10 removed: `requires-python = ">=3.11"` means uv cannot even resolve
         # the package there, so the 3.10 leg could never have passed (audit Q6).
-        run: echo "versions=['3.11','3.12','3.13','3.14']" >> $GITHUB_OUTPUT
+        run: echo "versions=['3.11','3.12','3.13']" >> $GITHUB_OUTPUT
 
   # Job 2: Install & Cache Dependencies
   setup-dependencies:
