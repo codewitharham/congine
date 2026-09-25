@@ -81,9 +81,26 @@ default and tenant registries automatically replace closed cached instances.
 ## LangChain callback behavior
 
 `CongineCallbackHandler` propagates every `CongineBaseException`, including
-strict validation failures, missing contracts, and lifecycle failures. It logs
-and contains unrelated host-library callback failures by returning `None`.
-Per-run results and `last_result` share one lock-backed state boundary.
+strict validation failures, missing contracts, and lifecycle failures. It sets
+`raise_error = True`, so those exceptions escape LangChain's own
+`CallbackManager` instead of being logged and swallowed there. It logs and
+contains unexpected failures raised by the validation use case itself by
+returning `None`. Per-run results and `last_result` share one lock-backed state
+boundary.
+
+The handler evaluates an output only when it can establish that the output is
+**completely represented**: exactly one generation whose content is a plain
+string, with no tool calls, function calls or other populated side channels,
+no truncated or otherwise incomplete termination reason, and — for a stream —
+a final `LLMResult` whose text matches the streamed tokens exactly. Anything
+else raises `CongineUnsupportedRepresentationError` *before* the contract is
+consulted: no `ValidationResult` is produced and no telemetry event is
+published. The error carries a fixed reason code only, never model output.
+This includes multiple candidates, content blocks or images, a stream with no
+final response, and a stream longer than `CONGINE_MAX_STREAM_BUFFER_CHARS`
+(the stream is refused, never clipped). Every `on_llm_new_token` and
+`on_llm_end` call needs a hashable `run_id`; real LangChain dispatch always
+supplies one.
 
 The worked example documents the integration in
 [`examples/LangChain/README.md`](examples/LangChain/README.md). Its deterministic
@@ -148,7 +165,7 @@ Every field of `CongineConfig` is settable via `CONGINE_*` environment variables
 | `max_schema_bytes` | `CONGINE_MAX_SCHEMA_BYTES` | `1048576` | Max size of a **cached schema** on the validation hot path. |
 | `max_contract_files` | `CONGINE_MAX_CONTRACT_FILES` | `1000` | Stop scanning a contracts directory after this many files. |
 | `max_contract_file_bytes` | `CONGINE_MAX_CONTRACT_FILE_BYTES` | `1048576` | Max bytes read per **contract file** on disk. Distinct from `max_schema_bytes`. |
-| `max_stream_buffer_chars` | `CONGINE_MAX_STREAM_BUFFER_CHARS` | `500000` | LangChain token-buffer cap; excess tokens are silently clipped. |
+| `max_stream_buffer_chars` | `CONGINE_MAX_STREAM_BUFFER_CHARS` | `500000` | LangChain token-buffer cap; a stream that exceeds it is refused (`CongineUnsupportedRepresentationError`), never clipped. |
 | `max_http_response_bytes` | `CONGINE_MAX_HTTP_RESPONSE_BYTES` | `10485760` | Control-plane response ceiling, checked before the body is parsed. |
 | `start_background_services` | `CONGINE_START_BACKGROUND_SERVICES` | `true` | Start the cache sweeper and telemetry drain daemons (and their atexit hooks) at container init. `false` is for tests and embedders that manage their own lifecycle — it is **not** an offline switch. |
 

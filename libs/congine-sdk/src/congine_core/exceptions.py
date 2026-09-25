@@ -54,6 +54,23 @@ class CongineLifecycleError(CongineBaseException):
     """Work was requested after an SDK component entered terminal shutdown."""
 
 
+class CongineUnsupportedRepresentationError(CongineBaseException):
+    """The host output cannot be completely represented under supported semantics.
+
+    Raised by a framework adapter *before* any policy evaluation (P2-03a1): the
+    adapter could not establish that the output it was handed is complete and
+    of a supported shape, so no contract was consulted and no
+    ``ValidationResult`` exists. It is therefore neither a breach
+    (:class:`CongineValidationError`) nor a pass, nor a timeout — it means
+    **no policy verdict was produced**, and ``DEGRADE`` must never turn it into
+    approval.
+
+    The message carries only a fixed reason code, never host or model content.
+    It is deliberately a canonical type, not an alias of
+    :class:`CongineValidationError`.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Capacity signalling (audit P0-06)
 # --------------------------------------------------------------------------- #
@@ -115,6 +132,7 @@ __all__ = [
     "CongineCacheError",
     "CongineTelemetryError",
     "CongineLifecycleError",
+    "CongineUnsupportedRepresentationError",
     # Capacity signalling (audit P0-06)
     "LoadShedError",
     # Tier 2 aliases

@@ -260,6 +260,8 @@ def test_semantic_validation_disabled_by_default() -> None:
 
 def test_langchain_handler_through_real_container() -> None:
     pytest.importorskip("langchain_core")
+    from langchain_core.outputs import Generation, LLMResult
+
     from congine_core.adapters.langchain_handler import CongineCallbackHandler
 
     container = _container()
@@ -268,8 +270,33 @@ def test_langchain_handler_through_real_container() -> None:
         handler = CongineCallbackHandler("lc-contract", container=container)
         for tok in ["hel", "lo ", "there"]:
             handler.on_llm_new_token(tok, run_id="run-1")
-        result = handler.on_llm_end(run_id="run-1")
+        # P2-03a1: a stream is governed only with its matching final response.
+        final = LLMResult(generations=[[Generation(text="hello there")]])
+        result = handler.on_llm_end(final, run_id="run-1")
         assert result is not None and result.is_pass()
         assert len(container.event_bus.published) == 1
+    finally:
+        container.close()
+
+
+def test_langchain_unsupported_representation_emits_no_telemetry() -> None:
+    pytest.importorskip("langchain_core")
+    from langchain_core.outputs import Generation, LLMResult
+
+    from congine_core.adapters.langchain_handler import CongineCallbackHandler
+    from congine_core.exceptions import CongineUnsupportedRepresentationError
+
+    container = _container()
+    try:
+        container.schema_storage.put("lc-contract", {}, 300)  # permissive schema
+        handler = CongineCallbackHandler("lc-contract", container=container)
+        candidates = LLMResult(
+            generations=[[Generation(text="first"), Generation(text="second")]]
+        )
+        with pytest.raises(CongineUnsupportedRepresentationError):
+            handler.on_llm_end(candidates, run_id="run-1")
+        # Refused before the use case: no evaluation, so no telemetry event.
+        assert container.event_bus.published == []
+        assert handler.result_for("run-1") is None
     finally:
         container.close()
