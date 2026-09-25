@@ -14,6 +14,7 @@ live in:
 | `F-*` | `docs/audits/PHASE0_AUDIT_AND_HEALTH.md` |
 | `Q*` | `docs/architecture/OPEN_QUESTIONS.md` |
 | `P0-*` | `docs/audits/PHASE0_COMPLETION_ROADMAP.md` |
+| `P2-03a1` | `docs/_suite/hardening/P2_03A1_IMPLEMENTATION_SPEC.md` |
 | `FIX-*`, `H*`, `M*`, `D-*`, `C*`, `L*` | original audit docs — **not present in this repository**, see §4 |
 
 Last reconciled against source: 2026-08-09.
@@ -47,6 +48,12 @@ Resolved in `docs/architecture/OPEN_QUESTIONS.md`; each row records what shipped
 |---|---|---|
 | **P0-1** | Safe tenant-container eviction: remove the registry entry and arm a `weakref.finalize`; never `close()` a possibly-live container, never tear down under `_tenant_lock` | `adapters/dependency_injection.py` `:78`, `:124`, `:156`, `:183`, `:199`, `:204` |
 | **P0-2** | Load-time WARNING naming schema keywords the rule engine silently ignores, de-duplicated per `(contract_id, schema fingerprint)` | `domain/schema_vocabulary.py`, `usecases/sync_contracts_usecase.py` `:40`, `:73`, `:275` |
+
+### P2-* — hardening milestones
+
+| ID | Meaning | Annotated at |
+|---|---|---|
+| **P2-03a1** | LangChain representation completeness and enforcement propagation. The callback handler evaluates only output it can establish as completely represented and refuses everything else before the use case runs, via the canonical `CongineUnsupportedRepresentationError` (no `ValidationResult`, no telemetry). `raise_error = True` lets refusals and strict BLOCKs escape LangChain's `CallbackManager`. Closure record: `docs/_suite/hardening/P2_03A1_COMPLETION_REPORT.md` | `exceptions.py` (`CongineUnsupportedRepresentationError`), `__init__.py` (`__all__`), `adapters/langchain_handler.py` (module docstring, `raise_error`, termination allowlist) |
 
 ### F-* — findings from `PHASE0_AUDIT_AND_HEALTH.md`
 

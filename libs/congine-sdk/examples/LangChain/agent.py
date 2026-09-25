@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from uuid import uuid4
 from dotenv import load_dotenv
+from langchain_core.outputs import Generation, LLMResult
 from pydantic import BaseModel, Field
 
 # SDK System Core Elements
-from congine_core import ServiceContainer
+from congine_core import ServiceContainer, ValidationResult
 from congine_core.adapters import CongineCallbackHandler, congine_guard
 from congine_core.config import CongineConfig
 from congine_core.exceptions import CongineValidationError
@@ -136,6 +137,27 @@ def dissect_and_print_breaches(
         print(f"      🚨 [{breach.rule}] Field '{breach.field}': {breach.message}")
 
 
+def stream_support_reply() -> Optional[ValidationResult]:
+    """Validate a streamed reply together with its final LangChain result.
+
+    Tokens alone do not prove what the model finally produced. The handler
+    evaluates a stream only when the final ``LLMResult`` arrives and matches
+    the streamed text exactly; a missing, mismatched, multi-candidate or
+    tool-bearing final result raises ``CongineUnsupportedRepresentationError``
+    before any contract is consulted. Real LangChain models supply this final
+    result automatically; a manual caller must supply it.
+    """
+    stream_protector = CongineCallbackHandler(REPLY_CONTRACT, container=container)
+    session_id = uuid4()
+    chunks = ["Hello ", "your ", "claim ", "is ", "valid."]
+
+    for chunk in chunks:
+        stream_protector.on_llm_new_token(chunk, run_id=session_id)
+
+    final_response = LLMResult(generations=[[Generation(text="".join(chunks))]])
+    return stream_protector.on_llm_end(response=final_response, run_id=session_id)
+
+
 # =============================================================================
 # 3. PRODUCTION WORKFLOW EMULATION
 # =============================================================================
@@ -201,15 +223,10 @@ def run_real_world_scenarios() -> None:
     # SCENARIO 3: Live Streaming Token Interface
     # -------------------------------------------------------------------------
     print("\n[Step 3] Emulating Live Streaming Interface Protection...")
-    stream_protector = CongineCallbackHandler(REPLY_CONTRACT, container=container)
-    session_id = uuid4()
-
-    for chunk in ["Hello ", "your ", "claim ", "is ", "valid."]:
-        stream_protector.on_llm_new_token(chunk, run_id=session_id)
-    stream_protector.on_llm_end(run_id=session_id)
+    reply_result = stream_support_reply()
 
     print(
-        f"   Stream Complete. Contract Status passed: {stream_protector.result_for(session_id).is_pass()}"
+        f"   Stream Complete. Contract Status passed: {reply_result is not None and reply_result.is_pass()}"
     )
 
 

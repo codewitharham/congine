@@ -693,13 +693,14 @@ system. This is the top of the graph; it may import everything.
 |---|---|---|
 | `adapters/dependency_injection.py` | 463 | `ServiceContainer` — the sole construction site; owns lifecycle, the default singleton, the tenant registry |
 | `adapters/guard.py` | 105 | `@congine_guard` — sync + async wrappers, three return modes, optional extractor |
-| `adapters/langchain_handler.py` | 147 | `CongineCallbackHandler` — optional, gated on `[langchain]` |
+| `adapters/langchain_handler.py` | 574 | `CongineCallbackHandler` — optional, gated on `[langchain]`; owns the P2-03a1 representation boundary (see §9.5) |
 | `adapters/__init__.py` | 26 | re-exports `ServiceContainer` + `congine_guard`; `CongineCallbackHandler` lazily via `__getattr__` |
 
-**Boundary check: clean.** Nothing below L5 imports an adapter. `langchain_handler.py` performs all
-its Congine imports *inside* methods (`:38-40`, `:57`, `:108`) so importing the module never pulls
-the container in, and `_BaseCallbackHandler` degrades to `object` when `langchain-core` is absent
-(`:8-16`), with the constructor raising a directed `ImportError` (`:33-37`).
+**Boundary check: clean.** Nothing below L5 imports an adapter. `langchain_handler.py` imports only
+L0 `exceptions` at module level (`:33`); its other Congine imports sit *inside* `__init__`
+(`:333-335`, `:352`), so importing the module never pulls the container in. `_BaseCallbackHandler`
+degrades to `object` when `langchain-core` is absent (`:38-46`), with the constructor raising a
+directed `ImportError` (`:329`). *(Line references re-verified under P2-03a1.)*
 
 ---
 
@@ -2263,8 +2264,10 @@ observes at the guard boundary under the default `fail_mode=degrade`; divergence
 |---|---|---|---|---|---|
 | 47 | **`CongineCallbackHandler` without `[langchain]`** | explicit `ImportError` with an install hint (`langchain_handler.py:33-37`) | raises at construction | none | none |
 | 48 | **No `container=` in multi-tenant mode** | `CongineConfigurationError` (`:42-51`) | raises at construction | none | none |
-| 49 | **Any exception during `on_llm_end` validation** | caught (`:105-119`); `KeyboardInterrupt`/`SystemExit` re-raised; everything else — including `CongineValidationError` from `strict` mode and `CongineContractNotFoundError` — swallowed, `last_result = None`, returns `None` | **the LLM callback never propagates a validation failure.** `strict` mode is effectively neutralised on this surface | ERROR `"LangChain validation failed"` with `contract_id`, `error_type` | the publish already happened inside `_finalize` |
-| 50 | **Stream exceeds `max_stream_buffer_chars`** (default 500 000) | further tokens are clipped/discarded under the lock (`:75-82`) | the completion is validated **truncated**, silently | none | normal |
+| 49 | **Exception from the validation use case in `on_llm_end`** | every `CongineBaseException` — including `CongineValidationError` from `strict` and `CongineContractNotFoundError` — is re-raised; any other exception is contained (`_evaluate`, `:474-491`) | SDK exceptions reach the host; a non-SDK use-case failure returns `None` (policy unchanged by P2-03a1, spec §27) | ERROR `"LangChain validation failed"` with `contract_id`, `error_type` | the publish already happened inside `_finalize` |
+| 50 | **Stream exceeds `max_stream_buffer_chars`** (default 500 000) | the run is sticky-refused under the lock (`_collect_token`, `:442-460`); retained text is cleared; **no clipping** — exactly the limit is accepted, one character more refuses | `CongineUnsupportedRepresentationError` `(stream_buffer_exceeded)`; no evaluation | ERROR `"LangChain output representation refused"` with `contract_id`, `error_type`, `reason` | none |
+| 50a | **Output not completely representable** (P2-03a1): missing/invalid `run_id`; non-text token or chunk; token ≠ chunk text; no final `LLMResult`; ≠ 1 generation group or candidate; content that is not a plain string; tool calls, function calls or populated `additional_kwargs`; truncated, incomplete or unknown termination reason (`generation_info`, `response_metadata`, top-level `llm_output`, stream chunks); stream text ≠ final text | refused before the use case (`_establish_completion`, `:462-472`; helpers `:155-310`). Stream refusals are sticky and keep the first reason; host-object failures are classified by the boundary rule, never propagated | `CongineUnsupportedRepresentationError` with a fixed reason code, raised `from None` (no host exception in `__cause__`/`__context__`); no `ValidationResult`; `result_for(run_id)` is `None` | ERROR `"LangChain output representation refused"` with `contract_id`, `error_type`, `reason` | **none** — `execute()` is never called |
+| 50b | **Handler exception under real LangChain dispatch** | `raise_error = True` (`:319`); LangChain's `CallbackManager`/`AsyncCallbackManager` re-raise instead of logging and swallowing | refusals and strict BLOCKs escape `invoke`/`ainvoke`/`stream` to the host; during a stream LangChain first calls `on_llm_error`, which clears the run | LangChain's own WARNING `repr(exc)` — content-free by construction | per rows 49–50a |
 
 ### 9.6 The two shapes of "fails closed"
 
@@ -2323,7 +2326,7 @@ on `queue.get(timeout=1.0)` — that 1 s poll is its responsiveness bound.
 | 5 | `ServiceContainer._default_lock` | `Lock` (ClassVar) | class | `_default_instance` | **yes — `cls(config)` at `:99`** |
 | 6 | `ServiceContainer._tenant_lock` | `Lock` (ClassVar) | class | `_tenant_registry`, `_evicted_total` | **yes — `cls(config)` at `:165`** |
 | 7 | `ServiceContainer._close_lock` | `Lock` | per container | `_closed`, `_finalizer` | no |
-| 8 | `CongineCallbackHandler._lock` | `Lock` | per handler | `_buffers`, `_buffer_lengths` | no — released before validating (`:87-89`, then `:97`) |
+| 8 | `CongineCallbackHandler._lock` | `Lock` | per handler | `_runs`, `_results`, `_last_result` | no — representation inspection and validation run outside it; never re-entered (`_refuse_locked` requires the caller to hold it, `:500`) |
 
 Plus two non-lock synchronisation primitives with lock-like roles: the `threading.BoundedSemaphore`
 in the executor (§10.3) and the `queue.Queue` in the bus (thread-safe by construction).
@@ -2418,8 +2421,8 @@ runs to completion regardless of `timeout_ms`; the comment at `:98-99` acknowled
 | 15 | `_closed`, `_finalizer` | `dependency_injection.py:206-208` | per container | `_close_lock` | any thread, incl. a GC finalizer |
 | 16 | `_warned_unenforced` | `sync_contracts_usecase.py:86` | per use case | **nothing** | boot thread and sync daemon — **unguarded, see §10.6** |
 | 17 | `_compiled_pattern` LRU cache | `domain/validator.py:41-44` | **process-wide module state** | `functools.lru_cache` internals (thread-safe) | every pool thread |
-| 18 | `_buffers`, `_buffer_lengths` | `langchain_handler.py:67-68` | per handler | `_lock` | LangChain callback threads |
-| 19 | `_results`, `last_result` | `langchain_handler.py:69-70` | per handler | **nothing** — written at `:102-103` *outside* the lock | LangChain callback threads |
+| 18 | `_runs` (one `_RunState` per active run; replaced `_buffers`/`_buffer_lengths` in P2-03a1) | `langchain_handler.py:362` | per handler | `_lock` | LangChain callback threads |
+| 19 | `_results`, `_last_result` | `langchain_handler.py:363-364` | per handler | `_lock` — every write goes through `_record_result` (`:532-539`); see F3 | LangChain callback threads |
 | 20 | `KSDriftEngine._reference` deque | `ks_drift.py:66` | per container | **nothing** | whichever host thread calls `record_drift_sample` |
 
 Everything in this table is **process-local**. There is no distributed state, no shared cache, no
@@ -2460,6 +2463,9 @@ the consequence is at worst a repeated log line. Recorded as debt D12.
 and `last_result` unguarded at `:102-103`. Concurrent runs can interleave such that `last_result`
 reflects a different run than the caller expects. `result_for(run_id)` (`:129-131`) is the correct,
 race-free accessor; `last_result` is inherently ambiguous under concurrency. Recorded as debt D13.
+*Status (re-verified under P2-03a1): the unguarded write is gone — `_results` and `_last_result`
+are written only by `_record_result` under `_lock`. `last_result` remains "most recent", so
+`result_for(run_id)` is still the accessor to use under concurrency.*
 
 ### 10.7 What is *not* a concurrency problem
 
@@ -2802,7 +2808,7 @@ current number is 46.
 | 41 | `max_payload_bytes` | `int` | `1_048_576` | `CONGINE_MAX_PAYLOAD_BYTES` | `_env_int` | `ValidateContractUseCase(max_payload_bytes=…)` `:309` | payload size ceiling (measured as JSON-encoded characters — §12.3) |
 | 42 | `max_schema_bytes` | `int` | `1_048_576` | `CONGINE_MAX_SCHEMA_BYTES` | `_env_int` | `ValidateContractUseCase(max_schema_bytes=…)` `:310` **and** `FileContractRepository(max_file_bytes=…)` `:250`, `:257` | schema size ceiling **and** per-contract-file read cap — one knob, two meanings |
 | 43 | `max_contract_files` | `int` | `1000` | `CONGINE_MAX_CONTRACT_FILES` | `_env_int` | `FileContractRepository(max_contract_files=…)` `:249`, `:256` | directory-scan cap |
-| 44 | `max_stream_buffer_chars` | `int` | `500_000` | `CONGINE_MAX_STREAM_BUFFER_CHARS` | `_env_int` | `CongineCallbackHandler._max_buffer_chars` `langchain_handler.py:60-64` | LangChain token-buffer cap; excess is silently clipped |
+| 44 | `max_stream_buffer_chars` | `int` | `500_000` | `CONGINE_MAX_STREAM_BUFFER_CHARS` | `_env_int` | `CongineCallbackHandler._max_buffer_chars` `langchain_handler.py:355` | LangChain token-buffer cap; a stream exceeding it is refused, never clipped (P2-03a1) |
 | 45 | `max_http_response_bytes` | `int` | `10_485_760` | `CONGINE_MAX_HTTP_RESPONSE_BYTES` | `_env_int` | `http_contract_repository.py:114,121` | control-plane response ceiling, checked before parsing |
 
 #### Container lifecycle (1)
@@ -3168,13 +3174,14 @@ Recorded as debt D16 in §16.
 | Schema size | 1 MiB | `DEFAULT_MAX_SCHEMA_BYTES` | `:148` | `INPUT_BOUNDS` breach |
 | Semantic breaches | 100 | `DEFAULT_SEMANTIC_MAX_BREACHES` | `jsonschema_validator.py:125` | truncation marker |
 | Contract files | 1 000 | `DEFAULT_MAX_CONTRACT_FILES` | `file_contract_repository.py:71`, `:100` | scan stops |
-| Stream buffer | 500 000 chars | `DEFAULT_MAX_STREAM_BUFFER_CHARS` | `langchain_handler.py:77-82` | tokens silently clipped |
+| Stream buffer | 500 000 chars | `DEFAULT_MAX_STREAM_BUFFER_CHARS` | `langchain_handler.py:455-457` | run refused (`stream_buffer_exceeded`), never clipped |
 | HTTP response | 10 MiB | `DEFAULT_MAX_HTTP_RESPONSE_BYTES` | `http_contract_repository.py:121` | `CongineSyncError` |
 | Reported unenforced paths | 20 | `_MAX_REPORTED` | `schema_vocabulary.py:141-143` | `"... (+N more)"` |
 | Warned-contract de-dup set | 4 096 | `_MAX_WARNED_CONTRACTS` | `sync_contracts_usecase.py:292` | set cleared wholesale |
 
-Every one of these is fail-closed except the stream-buffer clip (silently truncates) and the
-`_MAX_WARNED_CONTRACTS` reset (re-warns after a clear).
+Every one of these is fail-closed except the `_MAX_WARNED_CONTRACTS` reset (re-warns after a
+clear). The stream buffer was the other exception until P2-03a1, when the silent clip was replaced
+by a refusal.
 
 ### 13.6 Malformed-schema shapes — one resolved, one contained
 

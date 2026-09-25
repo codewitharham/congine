@@ -15,8 +15,8 @@ result reaches downstream code.
 | # | Entry point | File ref | Demonstrated behavior |
 |---|-------------|----------|-----------------------|
 | A | `@congine_guard` decorator | [`agent.py`](agent.py) `process_untrusted_customer_ticket` | validates normal and adversarial-prompt return decisions against `customer.support.return_processing` |
-| B | `CongineCallbackHandler` | [`agent.py`](agent.py) `run_real_world_scenarios` | joins five streamed tokens and validates the reply against `support.reply.text` |
-| C | offline CI runner | [`smoke.py`](smoke.py) | clears the Google key, disables remote services, executes the guarded fallback, and asserts the contract-valid `escalate` decision |
+| B | `CongineCallbackHandler` | [`agent.py`](agent.py) `stream_support_reply` | streams five tokens, ends with the matching final `LLMResult`, and validates the reply against `support.reply.text` |
+| C | offline CI runner | [`smoke.py`](smoke.py) | clears the Google key, disables remote services, executes the guarded fallback and the streamed reply, and asserts the contract-valid `escalate` decision and a passing reply |
 
 ---
 
@@ -87,6 +87,13 @@ closed cached instance rather than returning it.
   tokens and validates `{"text": <completion>}` — a **single field**. That is why
   it needs a *text-shaped* contract (`support.reply.text`); pointing it at a
   multi-field contract would always breach on the missing fields.
+  It validates only a **completely represented** output: the final `LLMResult`
+  must be present and match the streamed text, with exactly one plain-text
+  generation. Tool calls, content blocks, multiple candidates, truncation, or a
+  stream over `CONGINE_MAX_STREAM_BUFFER_CHARS` raise
+  `CongineUnsupportedRepresentationError` before any contract is consulted.
+  Real LangChain models supply the final result automatically; the manual
+  demo in `stream_support_reply` builds it explicitly.
 
 ### 4. `fail_mode=degrade` + guard `mode="raise"` (layered enforcement)
 Enforcement happens at two layers:

@@ -75,6 +75,7 @@ from congine_core.exceptions import (
     CongineLifecycleError,
     CongineSyncError,
     CongineTelemetryError,
+    CongineUnsupportedRepresentationError,
     CongineValidationError,
     ContractBreachException,
     LoadShedError,
@@ -163,6 +164,8 @@ __all__ = [
     "CongineCacheError",
     "CongineTelemetryError",
     "CongineLifecycleError",
+    # Adapter refused before evaluation: no policy verdict exists (P2-03a1).
+    "CongineUnsupportedRepresentationError",
     # Capacity signalling (audit P0-06). Subclasses TimeoutError, so existing
     # handlers keep working; catch it first to distinguish "not evaluated" from
     # "evaluated too slowly".
